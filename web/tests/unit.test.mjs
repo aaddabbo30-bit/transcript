@@ -5,7 +5,7 @@ import { test } from "node:test";
 
 import { ClaudeClient, CostTracker, FakeClaude, LLMError, estimateCost } from "../js/claude.js";
 import { Memory, MemoryPathError } from "../js/memory.js";
-import { INSIGHT_SCHEMA } from "../js/prompts.js";
+import { INSIGHT_SCHEMA, chatAskPrompt, chatSummaryPrompt, chatTranscript } from "../js/prompts.js";
 import { AudioRouter, Segmenter, TARGET_RATE, resample } from "../js/segmenter.js";
 import { CallSession, TranscriptReplay } from "../js/session.js";
 import { ScriptedTranscriber } from "../js/transcriber.js";
@@ -302,4 +302,21 @@ test("audio session: segmenter + (scripted) Whisper, and fatal API errors stop l
   assert.ok(result.error); // summary failed too (same broken key), but the transcript is kept
   assert.ok(result.transcript.length >= 3);
   assert.ok(events.some(([k, p]) => k === "warning" && Array.isArray(p) && p[0] === "insight_error"));
+});
+
+test("Claude chat requests: labels, notes, and only the end of a long call", () => {
+  const lines = Array.from({ length: 400 }, (_, i) => ({ t: i * 5, speaker: i % 2 ? "them" : "me", text: `frase numero ${i}` }));
+  const ask = chatAskPrompt({ lang: "it", lines, notes: "<file path=\"me.md\">\nMi chiamo Andrea\n</file>" });
+  assert.match(ask, /^Sono in una chiamata adesso\./);
+  assert.match(ask, /Le mie note personali:\n<file path="me\.md">/);
+  assert.match(ask, /\[33:15\] Altri: frase numero 399$/);
+  assert.match(ask, /\(inizio della chiamata omesso\)\n\[\d\d:\d\d\] (Io|Altri): /);
+  assert.ok(!ask.includes("frase numero 0\n"));
+  assert.ok(ask.length < 13500);
+  assert.equal(chatTranscript(lines.slice(0, 2), "en"), "[00:00] Me: frase numero 0\n[00:05] Them: frase numero 1");
+
+  const summary = chatSummaryPrompt({ lang: "en", meta: "today, 33:15", lines, liveRemember: ["Party on Saturday"] });
+  assert.match(summary, /^I just finished a call \(today, 33:15\)\./);
+  assert.match(summary, /Notes taken during the call:\n- Party on Saturday/);
+  assert.ok(summary.includes("[00:00] Me: frase numero 0") && !summary.includes("My personal notes"));
 });

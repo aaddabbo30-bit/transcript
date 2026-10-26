@@ -44,7 +44,7 @@ To publish it, do this once:
 
 1. Open the link in **Chrome or Edge on a computer**. Safari, Firefox and phones can't share call audio.
 2. **Impostazioni / Settings**:
-   - paste your Anthropic API key. It is saved only in this browser. Tip: create a dedicated key with a spending limit;
+   - **API key (optional)**: with an Anthropic API key, suggestions refresh by themselves every ~25 seconds and the summary is written automatically. The key is saved only in this browser. Tip: create a dedicated key with a spending limit. Without a key, use **Ask Claude** (see below);
    - choose the transcription model: `base` is quick; `small` is more accurate but needs a good graphics card.
 3. **Memoria / Memory**: write a few lines about yourself, or use *Import Claude memory*. It works as in the desktop app.
 4. **Chiamata / Call**: choose the language and what to listen to, then press **Avvia / Start**. Chrome asks what to share:
@@ -63,9 +63,21 @@ To publish it, do this once:
    - download it as Markdown if you like;
    - approve the memory proposals.
 
+**Without an API key: Ask Claude**
+
+The page can hand the call to a chat on claude.ai instead. The chat runs on your Claude plan, and Claude already knows you from your Claude memory.
+- During the call, press **Chiedi a Claude ↗ / Ask Claude ↗**:
+  - the page copies the transcript (its last ~12,000 characters) with a ready-made request: what is being discussed, up to 3 things to say now, things to remember;
+  - the first time, it also opens claude.ai in a new tab. Paste (Ctrl+V) and send;
+  - press it again whenever you want new suggestions, and paste in the same chat.
+- After **Stop**, press **Riassunto con Claude ↗ / Summary with Claude ↗**. The page copies the whole transcript with a request for the summary, and opens a new chat.
+- In **Settings → Claude chat to open** you can put the link of one of your claude.ai Projects, so every call ends up there.
+
+Why not run the whole thing inside Claude, as an artifact? Artifacts on claude.ai can't use the microphone or capture the audio of a tab. So the page does the listening and transcription, and the Claude chat does the thinking.
+
 **What stays where**
 - **Audio**: transcribed inside the browser with Whisper (Transformers.js). It never leaves your computer.
-- **Text sent to Claude**: only the transcript text and your memory.
+- **Text sent to Claude**: only the transcript text and your memory. With *Ask Claude*, the page sends nothing: you paste the text into claude.ai yourself.
 - **API key, memory and call history**: stored in that browser's local storage.
 - **Backup**: use *Memory → Export memory* to keep a copy or move it to another computer. On another computer, use *Import backup*; plain `.md` files from the desktop app's memory folder work too.
 
@@ -326,6 +338,7 @@ The web app needs no build step: plain ES modules, served as static files.
 - `js/whisper-worker.js`: Whisper in a Web Worker with [Transformers.js](https://github.com/huggingface/transformers.js), WebGPU with a WASM fallback, loaded from jsDelivr.
 - `js/claude.js`: the official Anthropic SDK, bundled in `vendor/`, with `dangerouslyAllowBrowser`.
 - `js/session.js`: the call lifecycle.
+- `js/prompts.js`: also the requests that *Ask Claude* copies for a claude.ai chat.
 - `js/memory.js` and `js/history.js`: local storage.
 
 After changing anything in `js/`, `vendor/` or `css/`, run `node web/tools/stamp.mjs`. It writes a hash of those files into `index.html` (`?v=…` links plus an import map), so browsers fetch a new version as a whole instead of mixing new and cached files. CI fails when the stamp is out of date.
@@ -333,8 +346,8 @@ After changing anything in `js/`, `vendor/` or `css/`, run `node web/tools/stamp
 Run it locally with any static server, for example `python -m http.server -d web`, then open <http://localhost:8000>; `localhost` counts as secure for the microphone.
 
 Tests:
-- `node --test web/tests/unit.test.mjs` runs 16 unit tests, including the real SDK against a mocked `fetch` and full simulated calls.
-- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It also checks that every script, including the Whisper worker, loads with the current stamp. It needs `playwright`.
+- `node --test web/tests/unit.test.mjs` runs 17 unit tests, including the real SDK against a mocked `fetch` and full simulated calls.
+- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It also covers *Ask Claude* without an API key, the always-on-top window, and checks that every script, including the Whisper worker, loads with the current stamp. It needs `playwright`.
 
 ### Run from source
 

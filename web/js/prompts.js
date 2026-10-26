@@ -1,5 +1,8 @@
 // Prompts and JSON schemas for Claude (same as call_assistant/prompts.py).
 
+import { ME } from "./segmenter.js";
+import { fmtTime } from "./transcript.js";
+
 export const INSIGHT_SCHEMA = {
   type: "object",
   properties: {
@@ -162,4 +165,93 @@ ${transcript}
 </full_transcript>
 
 Write the wrap-up.`;
+}
+
+// ---------------------------------------------------------------- Claude chat
+// Without an API key the user can paste the call into a chat on claude.ai: it
+// runs on their Claude plan and knows them from their Claude memory. These
+// are the requests the page copies for that, in the interface language.
+
+const CHAT = {
+  it: {
+    me: "Io",
+    them: "Altri",
+    cut: "(inizio della chiamata omesso)",
+    transcript: "Trascrizione",
+    notes: "Le mie note personali",
+    remember: "Appunti presi durante la chiamata",
+    ask: `Sono in una chiamata adesso. Sotto c'è la trascrizione automatica: può contenere errori; "Io" sono io, "Altri" sono le altre persone (o il video che sto guardando). Usa anche quello che sai di me.
+
+Rispondi brevissimo, lo leggo mentre parlo:
+1. Di cosa si parla, in una riga.
+2. Fino a 3 cose che potrei dire adesso (domande da fare o risposte), pronte da dire ad alta voce, nella lingua della chiamata.
+3. Cose da ricordare (nomi, date, numeri, impegni), se ce ne sono.`,
+    summary: `Ho appena finito una chiamata ({meta}). Sotto c'è la trascrizione automatica: può contenere errori; "Io" sono io, "Altri" sono le altre persone. Usa anche quello che sai di me.
+
+Scrivi:
+1. Un titolo breve.
+2. Il riassunto, in 5-10 righe.
+3. I punti chiave.
+4. Le cose da fare: chi, cosa, entro quando.
+5. Cosa vale la pena ricordare di me e delle persone della chiamata per le prossime volte.`,
+  },
+  en: {
+    me: "Me",
+    them: "Them",
+    cut: "(start of the call left out)",
+    transcript: "Transcript",
+    notes: "My personal notes",
+    remember: "Notes taken during the call",
+    ask: `I'm in a call right now. Below is the automatic transcript: it can contain mistakes; "Me" is me, "Them" is the other people (or the video I'm watching). Also use what you know about me.
+
+Answer very briefly, I'll read it while I talk:
+1. What we're talking about, in one line.
+2. Up to 3 things I could say now (questions to ask or answers), ready to say out loud, in the language of the call.
+3. Things to remember (names, dates, numbers, commitments), if any.`,
+    summary: `I just finished a call ({meta}). Below is the automatic transcript: it can contain mistakes; "Me" is me, "Them" is the other people. Also use what you know about me.
+
+Write:
+1. A short title.
+2. The summary, in 5-10 lines.
+3. The key points.
+4. The action items: who, what, by when.
+5. What is worth remembering about me and the people in the call for next time.`,
+  },
+};
+
+/** The transcript as "[mm:ss] Me: text" lines; only the end when longer than maxChars. */
+export function chatTranscript(lines, lang = "it", maxChars = Infinity) {
+  const c = CHAT[lang] || CHAT.it;
+  const out = [];
+  let size = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    const row = `[${fmtTime(l.t)}] ${l.speaker === ME ? c.me : c.them}: ${l.text}`;
+    if (out.length && size + row.length + 1 > maxChars) {
+      out.unshift(c.cut);
+      break;
+    }
+    out.unshift(row);
+    size += row.length + 1;
+  }
+  return out.join("\n");
+}
+
+/** What to paste in a Claude chat during the call to get suggestions now. */
+export function chatAskPrompt({ lang = "it", lines, notes = "", maxChars = 12000 }) {
+  const c = CHAT[lang] || CHAT.it;
+  const parts = [c.ask];
+  if (notes) parts.push(`${c.notes}:\n${notes}`);
+  parts.push(`${c.transcript}:\n${chatTranscript(lines, lang, maxChars)}`);
+  return parts.join("\n\n");
+}
+
+/** What to paste in a Claude chat after the call to get the summary. */
+export function chatSummaryPrompt({ lang = "it", meta, lines, liveRemember = [], notes = "" }) {
+  const c = CHAT[lang] || CHAT.it;
+  const parts = [c.summary.replace("{meta}", meta)];
+  if (notes) parts.push(`${c.notes}:\n${notes}`);
+  if (liveRemember.length) parts.push(`${c.remember}:\n${liveRemember.map((r) => `- ${r}`).join("\n")}`);
+  parts.push(`${c.transcript}:\n${chatTranscript(lines, lang)}`);
+  return parts.join("\n\n");
 }

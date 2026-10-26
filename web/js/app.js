@@ -6,11 +6,13 @@ import { download, deleteCall, loadCalls, saveCall, summaryMarkdown, transcriptM
 import { translator } from "./i18n.js";
 import { Memory, MemoryPathError } from "./memory.js";
 import { BIG_FILES, ModelFileError, hasManualModel, importModelFiles, manualDownloadLinks } from "./model-files.js";
+import { chatAskPrompt, chatSummaryPrompt } from "./prompts.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
 import { fmtTime, parseTranscript } from "./transcript.js";
 
-const $ = (id) => document.getElementById(id);
+// The live panel can be in the always-on-top window (see openPip), outside this document.
+const $ = (id) => document.getElementById(id) || (pipWindow && pipWindow.document.getElementById(id));
 const params = new URLSearchParams(location.search);
 // Test hooks: ?engine=scripted (no Whisper download), ?llm=fake (no API key), ?speed=N (demo speed).
 const TEST_ENGINE = params.get("engine");
@@ -26,7 +28,9 @@ const DEFAULTS = {
   insightModel: "claude-haiku-5-5",
   summaryModel: "claude-opus-5-5",
   transcriptWindow: 240,
+  claudeUrl: "", // chat that «Ask Claude» opens; "" = a new chat
 };
+const CLAUDE_NEW_CHAT = "https://claude.ai/new";
 
 function store() {
   try {
@@ -64,6 +68,8 @@ let session = null;
 let lastResult = null;
 let copiedUntil = 0;
 let pipWindow = null;
+let claudeOpened = false; // the Claude chat was opened from this page
+let notesSentTo = null; // the session whose first «Ask Claude» carried the personal notes
 
 // ------------------------------------------------------------------ helpers
 function applyTranslations() {
@@ -127,9 +133,13 @@ function resetLive() {
   $("transcript").innerHTML = "";
   $("suggestions").innerHTML = "";
   $("remember").innerHTML = "";
-  $("topic").textContent = t("waiting_more");
+  $("topic").textContent = session && session.insightsDisabled ? t("waiting_chat") : t("waiting_more");
   $("topic").className = "topic waiting";
   $("cost").textContent = "$0.0000";
+  // Without an API key there are no automatic suggestions, nor costs.
+  const chatOnly = Boolean(session && session.insightsDisabled);
+  show($("cost"), !chatOnly);
+  show($("refresh"), !chatOnly);
   $("timer").textContent = "00:00";
   $("countdown").textContent = "";
   setNotice($("notice"), "");
@@ -303,6 +313,75 @@ function tick() {
   else if (next > 0) $("countdown").textContent = t("next_update", { s: Math.ceil(next) });
 }
 
+// ------------------------------------------------------------ Claude chat
+// Without an API key: copy the call with a ready-made request, open Claude,
+// the user pastes. The chat runs on their Claude plan and knows them.
+
+function claudeUrl() {
+  return settings.claudeUrl || CLAUDE_NEW_CHAT;
+}
+
+/** The link as typed if it is on claude.ai, "" for the default, null otherwise. */
+function cleanClaudeUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" && url.hostname === "claude.ai" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function personalNotes() {
+  const { text, empty } = memory.loadText();
+  return empty ? "" : text;
+}
+
+/** Copy first (a page that lost focus can't copy), then open Claude in a new tab. */
+async function sendToClaude(text, view, openTab) {
+  if (!(await copyText(text, view))) return false;
+  if (openTab) {
+    let win = null;
+    try {
+      win = view.open(claudeUrl(), "_blank");
+    } catch {
+      /* blocked: the user opens Claude */
+    }
+    if (win) claudeOpened = true;
+  }
+  return true;
+}
+
+async function askClaude(e) {
+  const view = e.view || window;
+  if (!session || !session.store.length) {
+    setNotice($("notice"), t("ask_empty"), "warn");
+    return;
+  }
+  // The personal notes go with the first request only: the chat keeps them.
+  const notes = notesSentTo === session ? "" : personalNotes();
+  const text = chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines, notes });
+  if (await sendToClaude(text, view, !claudeOpened)) {
+    notesSentTo = session;
+    setNotice($("notice"), t("ask_copied"), "ok");
+  } else setNotice($("notice"), t("ask_copy_failed"), "error");
+}
+
+async function summaryWithClaude(e) {
+  if (!lastResult) return;
+  const meta = `${new Date(lastResult.startedAt).toLocaleString()}, ${fmtTime(lastResult.durationS)}`;
+  const text = chatSummaryPrompt({
+    lang: settings.uiLanguage,
+    meta,
+    lines: lastResult.transcript,
+    liveRemember: lastResult.liveRemember || [],
+    notes: personalNotes(),
+  });
+  const ok = await sendToClaude(text, e.view || window, true);
+  setNotice($("summary-claude-status"), t(ok ? "ask_copied" : "ask_copy_failed"), ok ? "ok" : "error");
+}
+
 async function stopCall() {
   if (!session || session.stopping) return;
   $("stop").disabled = true;
@@ -316,7 +395,9 @@ function showSummary(result) {
   const d = call.data || {};
   $("summary-title").textContent = d.title || t("summary_title");
   $("summary-meta").textContent = `${new Date(call.startedAt).toLocaleString()} · ${fmtTime(call.durationS)} · $${call.cost.toFixed(4)}`;
-  setNotice($("summary-error"), call.error ? t("summary_failed", { error: call.error }) : "", "warn");
+  if (call.error === "no API key") setNotice($("summary-error"), t("summary_no_key"), "");
+  else setNotice($("summary-error"), call.error ? t("summary_failed", { error: call.error }) : "", "warn");
+  setNotice($("summary-claude-status"), "");
   $("summary-body").textContent = d.summary || "";
   const lists = $("summary-lists");
   lists.innerHTML = "";
@@ -501,6 +582,7 @@ function renderSettings() {
   $("interval").value = settings.insightInterval;
   $("summary-model").value = settings.summaryModel;
   $("ui-language").value = settings.uiLanguage;
+  $("claude-url").value = settings.claudeUrl;
   $("key-status").textContent = "";
   $("settings-status").textContent = "";
 }
@@ -519,6 +601,8 @@ function wire() {
   $("stop").addEventListener("click", stopCall);
   $("refresh").addEventListener("click", () => session && session.requestInsight());
   $("pip").addEventListener("click", openPip);
+  $("ask-claude").addEventListener("click", askClaude);
+  $("summary-claude").addEventListener("click", summaryWithClaude);
   $("live-language").addEventListener("change", (e) => {
     settings.callLanguage = e.target.value;
     saveSettings();
@@ -627,12 +711,18 @@ function wire() {
   $("settings-save").addEventListener("click", () => {
     const interval = Math.max(10, Math.min(120, Number($("interval").value) || 25));
     const uiChanged = $("ui-language").value !== settings.uiLanguage;
+    const chatUrl = cleanClaudeUrl($("claude-url").value);
+    if (chatUrl === null) {
+      $("settings-status").textContent = t("settings_claude_url_bad");
+      return;
+    }
     settings = {
       ...settings,
       whisperModel: $("whisper-model").value,
       insightInterval: interval,
       summaryModel: $("summary-model").value,
       uiLanguage: $("ui-language").value,
+      claudeUrl: chatUrl,
     };
     saveSettings();
     if (uiChanged) {

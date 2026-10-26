@@ -97,7 +97,13 @@ const errors = [];
 let failed = false;
 
 async function newPage(query, { apiKey = "sk-ant-e2e-test" } = {}) {
-  const context = await browser.newContext({ viewport: { width: 900, height: 1000 }, locale: "it-IT" });
+  const context = await browser.newContext({
+    viewport: { width: 900, height: 1000 },
+    locale: "it-IT",
+    permissions: ["clipboard-read", "clipboard-write"],
+  });
+  // «Ask Claude» opens claude.ai: answer with a stand-in page.
+  await context.route("https://claude.ai/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Claude</title>" }));
   await context.addInitScript((key) => {
     if (key) localStorage.setItem("ca.apiKey", key);
     localStorage.setItem("ca.settings.v1", JSON.stringify({ uiLanguage: "it", insightInterval: 10 }));
@@ -154,8 +160,13 @@ await step("demo call through the real Claude SDK (mocked network): live insight
   await page.context().close();
 });
 
-await step("live microphone (Chromium fake device) -> segmenter -> scripted Whisper -> transcript", async () => {
-  const page = await newPage("?engine=scripted&llm=fake", { apiKey: "" });
+async function clipboard(page) {
+  await page.bringToFront();
+  return page.evaluate(() => navigator.clipboard.readText());
+}
+
+await step("live microphone without an API key -> scripted Whisper -> transcript -> «Ask Claude» in the Claude chat", async () => {
+  const page = await newPage("?engine=scripted", { apiKey: "" });
   await page.uncheck("#src-shared");
   await page.click("#start");
   await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length >= 2, null, { timeout: 30000 });
@@ -163,9 +174,48 @@ await step("live microphone (Chromium fake device) -> segmenter -> scripted Whis
   assert.match(first, /Io: frase di prova 1/);
   assert.match(await page.textContent("#audio-info"), /mic/i);
   assert.match(await page.textContent("#status"), /ascolto/i);
+  assert.match(await page.textContent("#topic"), /Chiedi a Claude/);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-mic.png") });
+
+  // First request: copied, and Claude opens in a new tab.
+  const [claude] = await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
+  assert.equal(claude.url(), "https://claude.ai/new");
+  await page.waitForSelector("#notice.ok");
+  const ask = await clipboard(page);
+  assert.match(ask, /^Sono in una chiamata adesso\./);
+  assert.match(ask, /Trascrizione:\n\[\d\d:\d\d\] Io: frase di prova 1/);
+  // Later requests only copy: the Claude tab is already open.
+  let popups = 0;
+  page.on("popup", () => popups++);
+  await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length >= 3, null, { timeout: 30000 });
+  await page.click("#ask-claude");
+  await page.waitForFunction(() => /frase di prova 3/.test(document.querySelector("#transcript").textContent));
+  assert.match(await clipboard(page), /Io: frase di prova 3/);
+  assert.equal(popups, 0);
+
   await page.click("#stop");
   await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
+  assert.match(await page.textContent("#summary-error"), /Riassunto con Claude/);
+  const [again] = await Promise.all([page.waitForEvent("popup"), page.click("#summary-claude")]);
+  assert.equal(again.url(), "https://claude.ai/new");
+  const summary = await clipboard(page);
+  assert.match(summary, /^Ho appena finito una chiamata \(/);
+  assert.match(summary, /Io: frase di prova 1/);
+  await page.context().close();
+});
+
+await step("always-on-top window: the live panel keeps updating there, and Stop works from it", async () => {
+  const page = await newPage("?speed=25&llm=fake");
+  await page.click("#demo");
+  await page.waitForSelector("#transcript .line");
+  const [pip] = await Promise.all([page.context().waitForEvent("page"), page.click("#pip")]);
+  await pip.waitForSelector("#live #transcript");
+  const before = await pip.evaluate(() => document.querySelectorAll("#transcript .line").length);
+  await pip.waitForFunction((n) => document.querySelectorAll("#transcript .line").length > n + 5, before, { timeout: 15000 });
+  await pip.waitForFunction(() => document.getElementById("timer").textContent !== "00:00", null, { timeout: 5000 });
+  await pip.click("#stop");
+  await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
+  assert.ok(await page.evaluate(() => Boolean(document.getElementById("live"))), "the panel is back in the page");
   await page.context().close();
 });
 
@@ -206,8 +256,13 @@ await step("memory import of the Claude export and settings", async () => {
   await page.fill("#api-key", "not-a-key");
   await page.click("#key-save");
   assert.match(await page.textContent("#key-status"), /sk-ant-/);
+  await page.fill("#claude-url", "https://example.com/chat");
+  await page.click("#settings-save");
+  assert.match(await page.textContent("#settings-status"), /claude\.ai/);
+  await page.fill("#claude-url", "https://claude.ai/project/0123");
   await page.selectOption("#ui-language", "en");
   await page.click("#settings-save");
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("ca.settings.v1"))).claudeUrl, "https://claude.ai/project/0123");
   assert.equal(await page.textContent('[data-tab="memory"]'), "Memory");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-settings.png") });
   await page.context().close();

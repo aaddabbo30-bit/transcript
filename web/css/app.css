@@ -54,6 +54,8 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 button.ghost { background: transparent; color: var(--muted); }
 button.big { font-size: 17px; padding: 10px 22px; }
 button.icon { background: transparent; border: 0; color: var(--muted); padding: 0 4px; }
+button.ask { border-color: var(--accent); color: var(--accent); }
+.panel-sub button.ask { padding: 3px 10px; font-size: 13px; }
 button:disabled { opacity: .5; cursor: default; }
 .notice { margin: 8px 0; font-size: 13px; color: var(--muted); }
 .notice.warn { color: var(--warn); }

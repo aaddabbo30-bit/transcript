@@ -142,7 +142,7 @@ export class Memory {
       parts.push(`<file path="${name}">\n${body}\n</file>`);
     }
     const text = parts.join("\n\n");
-    if (!text) return { text: "(The memory is empty: nothing is known about the user yet.)", truncated: false };
+    if (!text) return { text: "(The memory is empty: nothing is known about the user yet.)", truncated: false, empty: true };
     if (text.length > maxChars) return { text: `${text.slice(0, maxChars)}\n[... memory truncated ...]`, truncated: true };
     return { text, truncated: false };
   }
