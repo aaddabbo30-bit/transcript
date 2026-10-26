@@ -142,6 +142,15 @@
           <select id="whisper-model"><option value="base">base</option><option value="small">small</option></select>
         </label>
         <p class="hint" data-t="settings_whisper_hint"></p>
+        <div class="manual-model">
+          <h3 data-t="manual_title"></h3>
+          <p class="hint" data-t="manual_text"></p>
+          <ol id="manual-links"></ol>
+          <div class="row">
+            <label class="button"><span data-t="manual_pick"></span><input id="manual-files" type="file" multiple accept=".onnx,.json,.wasm" hidden></label>
+            <span id="manual-status" class="muted small"></span>
+          </div>
+        </div>
         <label class="field"><span data-t="settings_interval"></span><input id="interval" type="number" min="10" max="120" step="5"></label>
         <label class="field"><span data-t="settings_summary_model"></span>
           <select id="summary-model">

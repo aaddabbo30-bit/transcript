@@ -1,12 +1,11 @@
 // Web Worker: speech-to-text with Whisper running in the browser through
 // Transformers.js (https://github.com/huggingface/transformers.js, Apache-2.0).
-// The model is downloaded once from Hugging Face and cached by the browser.
+// The model is downloaded once from Hugging Face and cached by the browser, or
+// loaded by hand by the user (see model-files.js).
+
+import { MODEL_REPOS, hasManualModel } from "./model-files.js";
 
 const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
-const MODELS = {
-  base: "onnx-community/whisper-base",
-  small: "onnx-community/whisper-small",
-};
 const LANGUAGES = { it: "italian", en: "english" };
 
 let asr = null;
@@ -34,7 +33,7 @@ async function load(modelKey) {
       throw new Error(`Failed to fetch ${String(input)} (${(err && err.message) || err})`);
     }
   };
-  const model = MODELS[modelKey] || MODELS.base;
+  const model = MODEL_REPOS[modelKey] || MODEL_REPOS.base;
   const files = {};
   const progress_callback = (p) => {
     if (p.status === "progress" && p.total) {
@@ -45,6 +44,12 @@ async function load(modelKey) {
       post({ type: "progress", percent: Math.round((100 * loaded) / Math.max(1, total)) });
     }
   };
+  if (await hasManualModel(modelKey)) {
+    // Files loaded by hand are the 8-bit ones, which run on the WASM backend.
+    asr = await pipeline("automatic-speech-recognition", model, { device: "wasm", dtype: "q8", progress_callback });
+    await asr(new Float32Array(16000), { language: "english", task: "transcribe" }); // warm-up
+    return "wasm, modello caricato a mano";
+  }
   let device = await pickDevice();
   try {
     asr = await pipeline("automatic-speech-recognition", model, {

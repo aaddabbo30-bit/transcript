@@ -92,8 +92,8 @@ export class CallSession {
           this.transcriberFailed = err;
           this.emit(
             "error_text",
-            err.code === "model_download"
-              ? ["model_download_failed", { url: err.url || "huggingface.co" }]
+            err.code === "model_download" && err.url
+              ? ["model_download_failed", { url: err.url }]
               : ["whisper_failed", { error: err.message }],
           );
         },

@@ -105,3 +105,7 @@ body.pip .transcript { max-height: 30vh; }
   main { padding: 10px; }
   .tabs { margin-left: 0; }
 }
+
+.manual-model { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+.manual-model ol { margin: 6px 0; padding-left: 20px; }
+.manual-model a { color: var(--accent); }

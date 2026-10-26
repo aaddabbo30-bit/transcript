@@ -53,6 +53,10 @@ To publish it, do this once:
    - either way, turn on **"Share audio"**;
    - for a call on your phone, put it on speaker and leave only *My microphone* ticked.
 5. The first time, the Whisper model downloads (about 150 MB for `base`). The browser keeps it for next time.
+   Some company networks let large downloads through only after a security check in a browser tab, and then the page can't download the model by itself. In that case use **Settings → Load the model by hand**:
+   - click the two links, so the `.onnx` files download in a tab and pass the check;
+   - pick the downloaded files.
+   They are stored in the browser cache under their original address, so the app finds them there.
 6. Click **⧉ Always on top**: the live panel moves into a small window that stays above the call.
 7. Press **Stop** at the end:
    - the summary appears and is saved under **Archivio / History**;
