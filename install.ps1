@@ -28,7 +28,13 @@ param(
 # PowerShell 5.1 would otherwise turn into terminating errors. Exit codes are checked instead.
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'   # much faster downloads on Windows PowerShell 5.1
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+
+# Company-managed PCs often run PowerShell in "Constrained Language" mode, where
+# .NET calls ([Environment]::..., New-Object, COM) are blocked. Everything below
+# has a fallback that works there too.
+$Restricted = $ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage'
+$WebAppUrl = 'https://aaddabbo30-bit.github.io/transcript/'   # the no-install web version of this project
 
 $AppDir = $PSScriptRoot
 Set-Location -LiteralPath $AppDir   # "python -m call_assistant" needs this folder as working directory
@@ -46,13 +52,16 @@ function Stop-Install([string]$Text) {
     Write-Host ''
     Write-Host "ERRORE / ERROR: $Text" -ForegroundColor Red
     Write-Host 'Puoi rilanciare Installa.bat dopo aver risolto. / Fix the problem and run Installa.bat again.'
+    if ($Restricted) {
+        Write-Host "Su un PC aziendale bloccato usa la versione web, senza installare nulla: $WebAppUrl" -ForegroundColor Yellow
+    }
     exit 1
 }
 function Ask-YesNo([string]$Question, [bool]$Default) {
     if ($NonInteractive) { return $Default }
     $hint = if ($Default) { '[S/n]' } else { '[s/N]' }
     $answer = Read-Host "    $Question $hint"
-    if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
+    if (-not "$answer".Trim()) { return $Default }
     return $answer.Trim().ToLower() -in @('s', 'si', 'sì', 'y', 'yes')
 }
 
@@ -61,7 +70,7 @@ function Test-PythonExe([string]$Exe) {
     # A usable Python is 3.10-3.13, 64-bit x64 (the speech libraries have no ARM64
     # or 32-bit builds; x64 Python also runs on Windows on ARM), with working Tk and venv.
     if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
-    $probe = "import sys, platform, tkinter, venv; tkinter.Tcl(); " +
+    $probe = "import sys, platform, tkinter, venv; " +
              "ok = (3, 10) <= sys.version_info[:2] <= (3, 13) and platform.machine() == 'AMD64' and sys.maxsize > 2**32; " +
              "sys.exit(0 if ok else 1)"
     try {
@@ -73,23 +82,23 @@ function Test-PythonExe([string]$Exe) {
 function Find-Python {
     # Never let the new "Python install manager" start installing while we only probe.
     $env:PYTHON_MANAGER_AUTOMATIC_INSTALL = 'false'
-    $candidates = New-Object System.Collections.Generic.List[string]
+    $candidates = @()
     if (Get-Command py -ErrorAction SilentlyContinue) {
         foreach ($v in '3.12', '3.11', '3.13', '3.10') {
             try {
                 $exe = & py "-$v" -c "import sys; print(sys.executable)" 2>$null
-                if ($LASTEXITCODE -eq 0 -and $exe) { $candidates.Add(($exe | Select-Object -First 1).Trim()) }
+                if ($LASTEXITCODE -eq 0 -and $exe) { $candidates += "$($exe | Select-Object -First 1)".Trim() }
             } catch { }
         }
     }
     foreach ($v in '312', '311', '313', '310') {
-        $candidates.Add((Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe"))
-        if ($env:ProgramFiles) { $candidates.Add((Join-Path $env:ProgramFiles "Python$v\python.exe")) }
+        if ($env:LOCALAPPDATA) { $candidates += Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe" }
+        if ($env:ProgramFiles) { $candidates += Join-Path $env:ProgramFiles "Python$v\python.exe" }
     }
     # python on PATH, including Microsoft Store Python. If only the Store *alias* exists,
     # it just exits with an error when called with arguments, and is skipped.
     $onPath = Get-Command python -ErrorAction SilentlyContinue
-    if ($onPath) { $candidates.Add($onPath.Source) }
+    if ($onPath) { $candidates += $onPath.Source }
     foreach ($c in $candidates) { if (Test-PythonExe $c) { return $c } }
     return $null
 }
@@ -106,8 +115,8 @@ function Install-Python {
     }
     $installer = Join-Path $env:TEMP "python-$PythonVersion-amd64.exe"
     Write-Host "    Scarico / Downloading $PythonUrl"
-    try { Invoke-WebRequest -Uri $PythonUrl -OutFile $installer -UseBasicParsing -ErrorAction Stop }
-    catch { Stop-Install "Download di Python non riuscito / Python download failed: $_" }
+    try { Invoke-WebRequest -Uri $PythonUrl -OutFile $installer -UseBasicParsing -UseDefaultCredentials -ErrorAction Stop }
+    catch { Stop-Install "Download di Python non riuscito (rete o criteri aziendali?) / Python download failed: $($_.Exception.Message)" }
     $installArgs = '/quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_tcltk=1 Include_pip=1 Include_test=0'
     $proc = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru
     if ($proc.ExitCode -ne 0) { Stop-Install "Installazione di Python non riuscita (codice $($proc.ExitCode))." }
@@ -131,7 +140,7 @@ function Install-VCRuntime {
     if (-not (Test-VCRuntime)) {
         $vcInstaller = Join-Path $env:TEMP 'vc_redist.x64.exe'
         try {
-            Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $vcInstaller -UseBasicParsing -ErrorAction Stop
+            Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $vcInstaller -UseBasicParsing -UseDefaultCredentials -ErrorAction Stop
             Start-Process -FilePath $vcInstaller -ArgumentList '/install /quiet /norestart' -Verb RunAs -Wait -ErrorAction Stop
         } catch { Write-Note "Visual C++ runtime: $_" }
     }
@@ -141,12 +150,43 @@ function Install-VCRuntime {
 
 # --- API key -------------------------------------------------------------------
 function Read-ApiKey {
+    if ($Restricted) {
+        # Restricted PowerShell cannot decode hidden input: the key is visible while you paste it.
+        return "$(Read-Host '    Incolla la chiave (sk-ant-...) e premi Invio - solo Invio per saltare / paste key, Enter to skip')".Trim()
+    }
     $secure = Read-Host -AsSecureString '    Incolla la chiave (sk-ant-...) e premi Invio - solo Invio per saltare / paste key, Enter to skip'
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     if ($null -eq $plain) { return '' }
     return $plain.Trim()
+}
+
+# --- Folders and user environment variables (with restricted-mode fallbacks) ---------
+function Get-ShellFolder([string]$Name, [string]$RegistryName) {
+    try { $path = [Environment]::GetFolderPath($Name); if ($path) { return $path } } catch { }
+    try {
+        $path = (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders' -ErrorAction Stop).$RegistryName
+        if ($path) { return $path }
+    } catch { }
+    return $null
+}
+
+function Get-UserEnv([string]$Name) {
+    try { return (Get-ItemProperty -Path 'HKCU:\Environment' -Name $Name -ErrorAction Stop).$Name } catch { return $null }
+}
+
+function Set-UserEnv([string]$Name, [string]$Value) {
+    try { [Environment]::SetEnvironmentVariable($Name, $Value, 'User'); return } catch { }
+    & setx $Name $Value | Out-Null   # works in restricted PowerShell, and notifies Windows too
+}
+
+# A .bat launcher on the Desktop, for when shortcuts (.lnk via COM) are not allowed.
+function New-BatLauncher([string]$Path, [string]$Arguments) {
+    if ($AppDir -notmatch '^[\x20-\x7E]+$') { return $false }   # cmd.exe would misread non-ASCII paths
+    $text = "@echo off`r`ncd /d `"$AppDir`"`r`nstart `"`" `"$VenvPythonW`" $Arguments`r`n"
+    Set-Content -LiteralPath $Path -Value $text -Encoding ASCII
+    return $true
 }
 
 # --- Shortcuts -------------------------------------------------------------------
@@ -167,7 +207,13 @@ Write-Host ''
 Write-Host '  Call Assistant - installazione / setup' -ForegroundColor White
 Write-Host "  Cartella / folder: $AppDir"
 
-if (-not [Environment]::Is64BitOperatingSystem) { Stop-Install 'Serve Windows a 64 bit. / 64-bit Windows is required.' }
+if (-not ($env:PROCESSOR_ARCHITECTURE -in @('AMD64', 'ARM64') -or $env:PROCESSOR_ARCHITEW6432 -in @('AMD64', 'ARM64'))) {
+    Stop-Install 'Serve Windows a 64 bit. / 64-bit Windows is required.'
+}
+if ($Restricted) {
+    Write-Note 'Questo PC è gestito dalla tua organizzazione (PowerShell in modalità limitata).'
+    Write-Note "Provo comunque. Se l'installazione viene bloccata, usa la versione web, senza installare nulla: $WebAppUrl"
+}
 if ($AppDir -like '*OneDrive*') {
     Write-Note 'La cartella è dentro OneDrive: funziona, ma OneDrive sincronizzerà migliaia di file (.venv, modelli).'
     Write-Note 'Meglio spostarla, ad esempio in C:\Users\<nome>\CallAssistant. / Better move it outside OneDrive.'
@@ -213,7 +259,7 @@ Write-Ok 'Librerie verificate / libraries checked'
 Write-Step 'Chiave API Anthropic / Anthropic API key'
 Write-Host '    Serve per i suggerimenti di Claude. Si crea su https://console.anthropic.com (API Keys).'
 Write-Host '    Viene salvata come variabile d''ambiente utente ANTHROPIC_API_KEY, mai in un file.'
-$existingKey = [Environment]::GetEnvironmentVariable('ANTHROPIC_API_KEY', 'User')
+$existingKey = Get-UserEnv 'ANTHROPIC_API_KEY'
 $askKey = $true
 if ($existingKey) {
     Write-Ok 'Già configurata / already set'
@@ -224,7 +270,7 @@ if ($existingKey) {
 if ($askKey) {
     $key = Read-ApiKey
     if ($key -like 'sk-ant-*') {
-        [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', $key, 'User')
+        Set-UserEnv 'ANTHROPIC_API_KEY' $key
         $env:ANTHROPIC_API_KEY = $key
         Write-Ok 'Chiave salvata / key saved'
     } elseif ($key) {
@@ -257,11 +303,11 @@ if (-not $SkipModel) {
 
 if (-not $SkipShortcut) {
     Write-Step 'Creo le icone / Creating shortcuts'
-    $desktop = [Environment]::GetFolderPath('Desktop')
-    $programs = [Environment]::GetFolderPath('Programs')
+    $desktop = Get-ShellFolder 'Desktop' 'Desktop'
+    $programs = Get-ShellFolder 'Programs' 'Programs'
     $menu = Join-Path $programs 'Call Assistant'
     # Your data folder (memory, call summaries): the same one the app uses.
-    $dataDir = if ($env:CALL_ASSISTANT_HOME) { $env:CALL_ASSISTANT_HOME } else { Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Call Assistant' }
+    $dataDir = if ($env:CALL_ASSISTANT_HOME) { $env:CALL_ASSISTANT_HOME } else { Join-Path (Get-ShellFolder 'MyDocuments' 'Personal') 'Call Assistant' }
     $memoryDir = Join-Path $dataDir 'memory'
     $callsDir = Join-Path $dataDir 'calls'
     $folderIcon = (Join-Path $env:SystemRoot 'System32\shell32.dll') + ',3'
@@ -282,7 +328,11 @@ if (-not $SkipShortcut) {
         Write-Ok "Desktop: '$ShortcutName'"
         Write-Ok "Menu Start > Call Assistant: $ShortcutName, Prova demo, Verifica installazione, Memoria, Chiamate, Disinstalla"
     } catch {
-        Write-Note "Icone non create / shortcuts not created: $_  (usa 'Avvia assistente.bat')"
+        # Restricted PowerShell blocks shortcut creation (COM): put .bat launchers on the Desktop instead.
+        $made = $false
+        try { $made = New-BatLauncher (Join-Path $desktop "$ShortcutName.bat") '-m call_assistant' } catch { }
+        if ($made) { Write-Ok "Desktop: '$ShortcutName.bat' (doppio clic per avviare / double-click to start)" }
+        else { Write-Note "Icone non create / shortcuts not created  (usa 'Avvia assistente.bat' in questa cartella)" }
     }
 }
 

@@ -9,11 +9,16 @@ $ErrorActionPreference = 'Continue'
 $AppDir = $PSScriptRoot
 Write-Host 'Chiudi prima l''assistente se è aperto. / Close the assistant first if it is running.'
 Read-Host 'Premi Invio per continuare / Press Enter to continue' | Out-Null
-foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
-    $link = Join-Path $folder 'Avvia assistente.lnk'
+function Get-ShellFolder([string]$Name, [string]$RegistryName) {
+    try { $path = [Environment]::GetFolderPath($Name); if ($path) { return $path } } catch { }
+    try { return (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders' -ErrorAction Stop).$RegistryName } catch { return $null }
+}
+$desktop = Get-ShellFolder 'Desktop' 'Desktop'
+$programs = Get-ShellFolder 'Programs' 'Programs'
+foreach ($link in @((Join-Path $desktop 'Avvia assistente.lnk'), (Join-Path $desktop 'Avvia assistente.bat'), (Join-Path $programs 'Avvia assistente.lnk'))) {
     if (Test-Path -LiteralPath $link) { Remove-Item -LiteralPath $link -Force; Write-Host "Rimosso / removed: $link" }
 }
-$menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Call Assistant'
+$menu = Join-Path $programs 'Call Assistant'
 if (Test-Path -LiteralPath $menu) { Remove-Item -LiteralPath $menu -Recurse -Force; Write-Host "Rimosso / removed: $menu" }
 foreach ($sub in @('.venv', 'models')) {
     $path = Join-Path $AppDir $sub
@@ -25,7 +30,8 @@ foreach ($sub in @('.venv', 'models')) {
 }
 $answer = Read-Host 'Cancellare anche la chiave API (ANTHROPIC_API_KEY)? / Also delete the API key? [s/N]'
 if ("$answer".Trim().ToLower() -in @('s', 'si', 'sì', 'y', 'yes')) {
-    [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', $null, 'User')
+    try { [Environment]::SetEnvironmentVariable('ANTHROPIC_API_KEY', $null, 'User') }
+    catch { Remove-ItemProperty -Path 'HKCU:\Environment' -Name 'ANTHROPIC_API_KEY' -ErrorAction SilentlyContinue }
     Write-Host 'Chiave rimossa / key removed'
 }
 Write-Host ''
