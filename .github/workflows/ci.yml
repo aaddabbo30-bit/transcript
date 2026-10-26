@@ -75,6 +75,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem -Recurse "$env:RUNNER_TEMP\ca-home\calls" | Select-Object FullName
 
+  installer-restricted:
+    name: install.ps1 on Windows (restricted PowerShell, like company PCs)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run the installer in Constrained Language mode
+        shell: powershell
+        run: |
+          $env:__PSLockdownPolicy = '4'   # child PowerShell processes run restricted, as under AppLocker/WDAC
+          $mode = powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode'
+          Write-Host "Language mode: $mode"
+          if ("$mode".Trim() -ne 'ConstrainedLanguage') { Write-Error "not restricted: $mode"; exit 1 }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NonInteractive -SkipModel
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path .\.venv\Scripts\pythonw.exe)) { Write-Error "no .venv"; exit 1 }
+          Get-ChildItem "$env:USERPROFILE\Desktop" -Filter 'Avvia assistente*' | Select-Object Name
+
   web:
     name: Web app (Node + Chromium)
     runs-on: ubuntu-latest
