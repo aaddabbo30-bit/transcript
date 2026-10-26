@@ -175,6 +175,30 @@ await step("memory import of the Claude export and settings", async () => {
   await page.selectOption("#mem-file", "claude-memory-export.md");
   assert.match(await page.inputValue("#mem-text"), /designer/);
   await page.click('[data-tab="settings"]');
+  // Model loaded by hand (company proxies that check downloads in a tab).
+  assert.equal(await page.locator("#manual-links a").count(), 2);
+  assert.match(await page.getAttribute("#manual-links a >> nth=0", "href"), /huggingface\.co\/onnx-community\/whisper-base\/resolve\/main\/onnx\/encoder_model_quantized\.onnx$/);
+  const onnx = (fill) => Buffer.concat([Buffer.from([0x08, 0x07]), Buffer.alloc(1_100_000, fill)]);
+  await page.setInputFiles("#manual-files", [
+    { name: "encoder_model_quantized.onnx", mimeType: "application/octet-stream", buffer: Buffer.from("<!DOCTYPE html><html>Security check</html>") },
+  ]);
+  await page.waitForFunction(() => /non è il file/.test(document.querySelector("#manual-status").textContent));
+  await page.setInputFiles("#manual-files", [
+    { name: "encoder_model_quantized.onnx", mimeType: "application/octet-stream", buffer: onnx(1) },
+  ]);
+  await page.waitForFunction(() => /Manca ancora: decoder_model_merged_quantized\.onnx/.test(document.querySelector("#manual-status").textContent));
+  await page.setInputFiles("#manual-files", [
+    { name: "decoder_model_merged_quantized (1).onnx", mimeType: "application/octet-stream", buffer: onnx(2) },
+  ]);
+  await page.waitForFunction(() => /pronto/.test(document.querySelector("#manual-status").textContent));
+  const cached = await page.evaluate(async () => {
+    const cache = await caches.open("transformers-cache");
+    const base = "https://huggingface.co/onnx-community/whisper-base/resolve/main/onnx/";
+    const enc = await cache.match(base + "encoder_model_quantized.onnx");
+    const dec = await cache.match(base + "decoder_model_merged_quantized.onnx");
+    return [enc && enc.headers.get("content-length"), dec && (await dec.arrayBuffer()).byteLength];
+  });
+  assert.deepEqual(cached, ["1100002", 1100002]);
   await page.fill("#api-key", "not-a-key");
   await page.click("#key-save");
   assert.match(await page.textContent("#key-status"), /sk-ant-/);

@@ -5,6 +5,7 @@ import { ClaudeClient, FakeClaude } from "./claude.js";
 import { download, deleteCall, loadCalls, saveCall, summaryMarkdown, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
 import { Memory, MemoryPathError } from "./memory.js";
+import { BIG_FILES, ModelFileError, hasManualModel, importModelFiles, manualDownloadLinks } from "./model-files.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
 import { fmtTime, parseTranscript } from "./transcript.js";
@@ -475,9 +476,28 @@ function renderHistory() {
 }
 
 // -------------------------------------------------------------- settings
+async function renderManualModel(message = "") {
+  const model = $("whisper-model").value || settings.whisperModel;
+  const list = $("manual-links");
+  list.innerHTML = "";
+  for (const { name, url } of manualDownloadLinks(model)) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = `${name} (whisper-${model})`;
+    li.append(a);
+    list.append(li);
+  }
+  const ready = await hasManualModel(model);
+  $("manual-status").textContent = [message, ready ? t("manual_ready") : ""].filter(Boolean).join(" ");
+}
+
 function renderSettings() {
   $("api-key").value = getApiKey();
   $("whisper-model").value = settings.whisperModel;
+  renderManualModel();
   $("interval").value = settings.insightInterval;
   $("summary-model").value = settings.summaryModel;
   $("ui-language").value = settings.uiLanguage;
@@ -584,6 +604,25 @@ function wire() {
     }
     $("api-key").value = "";
     renderSetup();
+  });
+  $("whisper-model").addEventListener("change", () => renderManualModel());
+  $("manual-files").addEventListener("change", async (e) => {
+    const model = $("whisper-model").value || settings.whisperModel;
+    try {
+      const { stored, skipped } = await importModelFiles(model, [...e.target.files]);
+      const parts = [];
+      if (stored.length) parts.push(t("manual_done", { files: stored.join(", ") }));
+      if (skipped.length) parts.push(t("manual_skipped", { files: skipped.join(", ") }));
+      if (!(await hasManualModel(model))) {
+        const missing = [];
+        for (const { name } of manualDownloadLinks(model)) if (!stored.includes(name)) missing.push(name);
+        if (missing.length && missing.length < BIG_FILES.length + 1) parts.push(t("manual_missing", { files: missing.join(", ") }));
+      }
+      await renderManualModel(parts.join(" "));
+    } catch (err) {
+      $("manual-status").textContent = err instanceof ModelFileError ? t("manual_invalid", { file: err.message }) : String(err.message || err);
+    }
+    e.target.value = "";
   });
   $("settings-save").addEventListener("click", () => {
     const interval = Math.max(10, Math.min(120, Number($("interval").value) || 25));
