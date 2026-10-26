@@ -23,7 +23,10 @@ export class WhisperTranscriber {
         } else if (msg.type === "error") {
           const err = new Error(msg.message);
           // A network failure while downloading the model (blocked site, proxy, offline).
-          if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg.message)) err.code = "model_download";
+          if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg.message)) {
+            err.code = "model_download";
+            err.url = (msg.message.match(/https?:\/\/\S+/) || [""])[0];
+          }
           reject(err);
         }
         else if (msg.type === "result") {

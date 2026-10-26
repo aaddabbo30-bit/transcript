@@ -63,7 +63,7 @@ export const STRINGS = {
     memory_truncated: "La memoria è molto lunga: ne uso solo una parte.",
     whisper_failed: "Trascrizione non disponibile: {error}",
     model_download_failed:
-      "Trascrizione non disponibile: non riesco a scaricare il modello da huggingface.co. Di solito è la rete (proxy o filtro aziendale) che blocca il sito. Verifica aprendo https://huggingface.co/onnx-community/whisper-base/resolve/main/config.json : se non si apre, prova da un'altra rete o da un altro computer.",
+      "Trascrizione non disponibile: il browser non riesce a scaricare questo file del modello: {url} . Di solito lo blocca la rete (proxy o filtro aziendale). Prova ad aprire quell'indirizzo in una nuova scheda per vedere cosa succede.",
     pip_unsupported: "La finestra sempre in primo piano richiede Chrome o Edge (versione 116 o successiva) su computer.",
     summary_title: "Riassunto della chiamata",
     key_points: "Punti chiave",
@@ -177,7 +177,7 @@ export const STRINGS = {
     memory_truncated: "Your memory is very long: only part of it is used.",
     whisper_failed: "Transcription unavailable: {error}",
     model_download_failed:
-      "Transcription unavailable: the speech model can't be downloaded from huggingface.co. Usually the network (a company proxy or filter) blocks that site. Check by opening https://huggingface.co/onnx-community/whisper-base/resolve/main/config.json : if it doesn't open, try another network or computer.",
+      "Transcription unavailable: the browser can't download this model file: {url} . Usually the network (a company proxy or filter) blocks it. Open that address in a new tab to see what happens.",
     pip_unsupported: "The always-on-top window needs Chrome or Edge (version 116 or later) on a computer.",
     summary_title: "Call summary",
     key_points: "Key points",

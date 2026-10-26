@@ -90,7 +90,12 @@ export class CallSession {
         },
         (err) => {
           this.transcriberFailed = err;
-          this.emit("error_text", err.code === "model_download" ? "model_download_failed" : ["whisper_failed", { error: err.message }]);
+          this.emit(
+            "error_text",
+            err.code === "model_download"
+              ? ["model_download_failed", { url: err.url || "huggingface.co" }]
+              : ["whisper_failed", { error: err.message }],
+          );
         },
       );
     } else {

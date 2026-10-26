@@ -26,6 +26,14 @@ async function pickDevice() {
 async function load(modelKey) {
   const { pipeline, env } = await import(TRANSFORMERS_URL);
   env.allowLocalModels = false;
+  // Report which download failed: a bare "Failed to fetch" doesn't say what was blocked.
+  env.fetch = async (input, init) => {
+    try {
+      return await fetch(input, init);
+    } catch (err) {
+      throw new Error(`Failed to fetch ${String(input)} (${(err && err.message) || err})`);
+    }
+  };
   const model = MODELS[modelKey] || MODELS.base;
   const files = {};
   const progress_callback = (p) => {
