@@ -86,18 +86,27 @@ jobs:
       - name: Run the installer in Constrained Language mode
         shell: powershell
         run: |
-          $env:__PSLockdownPolicy = '4'   # child PowerShell processes run restricted, as under AppLocker/WDAC
-          $mode = powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode'
-          Write-Host "Language mode: $mode"
-          if ("$mode".Trim() -ne 'ConstrainedLanguage') { Write-Error "not restricted: $mode"; exit 1 }
-          $out = powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NonInteractive -SkipModel 2>&1 | Out-String
-          $code = $LASTEXITCODE
-          Write-Host $out
-          if ($code -ne 0 -or -not (Test-Path .\.venv\Scripts\pythonw.exe)) {
-            $tail = (($out -split "`r?`n") | Where-Object { $_ } | Select-Object -Last 40) -join '%0A'
-            Write-Host "::error title=install.ps1 in restricted PowerShell (exit $code)::$tail"
-            exit 1
+          # PowerShell reads this switch from the machine environment: new PowerShell
+          # processes then run restricted, as under AppLocker/WDAC on company PCs.
+          [Environment]::SetEnvironmentVariable('__PSLockdownPolicy', '4', 'Machine')
+          $failed = $null
+          try {
+            $mode = "$(powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode')".Trim()
+            Write-Host "Language mode of a new PowerShell: $mode"
+            if ($mode -ne 'ConstrainedLanguage') {
+              $failed = "could not switch PowerShell to restricted mode (got '$mode')"
+            } else {
+              $out = powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NonInteractive -SkipModel 2>&1 | Out-String
+              $code = $LASTEXITCODE
+              Write-Host $out
+              if ($code -ne 0 -or -not (Test-Path .\.venv\Scripts\pythonw.exe)) {
+                $failed = "install.ps1 failed (exit $code)%0A" + ((($out -split "`r?`n") | Where-Object { $_ } | Select-Object -Last 40) -join '%0A')
+              }
+            }
+          } finally {
+            [Environment]::SetEnvironmentVariable('__PSLockdownPolicy', $null, 'Machine')
           }
+          if ($failed) { Write-Host "::error title=install.ps1 in restricted PowerShell::$failed"; exit 1 }
           Get-ChildItem "$env:USERPROFILE\Desktop" -Filter 'Avvia assistente*' | Select-Object Name
 
   web:
