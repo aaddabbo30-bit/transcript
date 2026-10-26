@@ -19,6 +19,17 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def make_root():
+    """tk.Tk(), retried: on Windows CI runners Tcl sometimes fails to read init.tcl ("No error")."""
+    for attempt in range(5):
+        try:
+            return tk.Tk()
+        except tk.TclError:
+            if attempt == 4:
+                raise
+            time.sleep(0.5)
+
+
 def pump(root, seconds: float, until=None) -> None:
     end = time.monotonic() + seconds
     while time.monotonic() < end:
@@ -31,7 +42,7 @@ def pump(root, seconds: float, until=None) -> None:
 def test_overlay_runs_a_demo_call(settings, paths):
     from call_assistant.ui.overlay import Overlay
 
-    root = tk.Tk()
+    root = make_root()
     try:
         made = []
 
@@ -81,7 +92,7 @@ def test_dialogs_open(settings, paths):
     from call_assistant.ui.dialogs import ImportMemoryDialog, SettingsDialog
     from call_assistant.ui.theme import Fonts
 
-    root = tk.Tk()
+    root = make_root()
     try:
         fonts = Fonts(root)
         t = Translator("en")
@@ -111,7 +122,7 @@ def test_closing_during_summary_waits_for_the_files(settings, paths):
                 time.sleep(1.5)
             return super().complete_json(**kw)
 
-    root = tk.Tk()
+    root = make_root()
     made = []
 
     def make_session(events):

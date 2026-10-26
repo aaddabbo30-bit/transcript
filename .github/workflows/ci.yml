@@ -90,9 +90,14 @@ jobs:
           $mode = powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode'
           Write-Host "Language mode: $mode"
           if ("$mode".Trim() -ne 'ConstrainedLanguage') { Write-Error "not restricted: $mode"; exit 1 }
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NonInteractive -SkipModel
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          if (-not (Test-Path .\.venv\Scripts\pythonw.exe)) { Write-Error "no .venv"; exit 1 }
+          $out = powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -NonInteractive -SkipModel 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0 -or -not (Test-Path .\.venv\Scripts\pythonw.exe)) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ } | Select-Object -Last 40) -join '%0A'
+            Write-Host "::error title=install.ps1 in restricted PowerShell (exit $code)::$tail"
+            exit 1
+          }
           Get-ChildItem "$env:USERPROFILE\Desktop" -Filter 'Avvia assistente*' | Select-Object Name
 
   web:

@@ -70,7 +70,7 @@ function Test-PythonExe([string]$Exe) {
     # A usable Python is 3.10-3.13, 64-bit x64 (the speech libraries have no ARM64
     # or 32-bit builds; x64 Python also runs on Windows on ARM), with working Tk and venv.
     if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
-    $probe = "import sys, platform, tkinter, venv; tkinter.Tcl(); " +
+    $probe = "import sys, platform, tkinter, venv; " +
              "ok = (3, 10) <= sys.version_info[:2] <= (3, 13) and platform.machine() == 'AMD64' and sys.maxsize > 2**32; " +
              "sys.exit(0 if ok else 1)"
     try {
