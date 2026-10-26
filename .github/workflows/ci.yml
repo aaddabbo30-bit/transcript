@@ -13,8 +13,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -23,17 +23,31 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb
-          xvfb-run -a python -m pytest
+          xvfb-run -a python -m pytest -rf --junitxml=test-report.xml
       - name: Tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest
+        run: python -m pytest -rf --junitxml=test-report.xml
+      - name: Show failed tests as annotations
+        if: failure()
+        shell: python
+        run: |
+          import os
+          import xml.etree.ElementTree as ET
+          if os.path.exists("test-report.xml"):
+              for case in ET.parse("test-report.xml").iter("testcase"):
+                  for tag in ("failure", "error"):
+                      node = case.find(tag)
+                      if node is not None:
+                          text = (node.get("message") or "") + "\n" + (node.text or "")[-2500:]
+                          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+                          print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
 
   installer:
     name: install.ps1 on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Run the installer (no questions, no model download)
