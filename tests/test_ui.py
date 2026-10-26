@@ -57,8 +57,8 @@ def test_overlay_runs_a_demo_call(settings, paths):
         # Clicking a suggestion copies it.
         first = overlay.suggestions.winfo_children()[0]
         first.event_generate("<Button-1>")
-        pump(root, 0.2)
-        assert root.clipboard_get() == "Come ti sei trovato con questa cosa?"
+        pump(root, 1.0, until=lambda: bool(overlay.last_copied))
+        assert overlay.last_copied == "Come ti sei trovato con questa cosa?"
 
         overlay.stop_call()
         pump(root, 10, until=lambda: overlay.summary_panel.winfo_ismapped())

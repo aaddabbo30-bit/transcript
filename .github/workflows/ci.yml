@@ -13,8 +13,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -23,17 +23,31 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb
-          xvfb-run -a python -m pytest
+          xvfb-run -a python -m pytest -rf --junitxml=test-report.xml
       - name: Tests (Windows)
         if: runner.os == 'Windows'
-        run: python -m pytest
+        run: python -m pytest -rf --junitxml=test-report.xml
+      - name: Show failed tests as annotations
+        if: failure()
+        shell: python
+        run: |
+          import os
+          import xml.etree.ElementTree as ET
+          if os.path.exists("test-report.xml"):
+              for case in ET.parse("test-report.xml").iter("testcase"):
+                  for tag in ("failure", "error"):
+                      node = case.find(tag)
+                      if node is not None:
+                          text = (node.get("message") or "") + "\n" + (node.text or "")[-2500:]
+                          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+                          print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
 
   installer:
     name: install.ps1 on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Run the installer (no questions, no model download)
@@ -60,3 +74,19 @@ jobs:
           .\.venv\Scripts\python.exe -m call_assistant --headless --demo --fake-llm --speed 40 --home "$env:RUNNER_TEMP\ca-home"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem -Recurse "$env:RUNNER_TEMP\ca-home\calls" | Select-Object FullName
+
+  web:
+    name: Web app (Node + Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Unit tests
+        run: node --test web/tests/unit.test.mjs
+      - name: Browser end-to-end test (fake microphone, mocked Claude API)
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          node web/tests/e2e.mjs

@@ -9,3 +9,5 @@ __pycache__/
 # Never commit personal data or keys
 .env
 *.key
+test-report.xml
+node_modules/

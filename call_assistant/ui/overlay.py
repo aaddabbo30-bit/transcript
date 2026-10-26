@@ -55,6 +55,7 @@ class Overlay:
         self._wrap_labels: list[tk.Label] = []
         self._insight_pending = False
         self._copied_until = 0.0
+        self.last_copied = ""
         self.fonts = Fonts(root)
         theme.apply_ttk_style(root, self.fonts)
         self._build_window(subtitle)
@@ -312,9 +313,18 @@ class Overlay:
         self.status_label.configure(text=self.t(key))
         self.status_dot.configure(fg=color)
 
-    def copy(self, text: str) -> None:
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
+    def copy(self, text: str, attempt: int = 0) -> None:
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+        except tk.TclError:
+            # On Windows another program can hold the clipboard for a moment: retry shortly.
+            if attempt < 3:
+                self.root.after(80, self.copy, text, attempt + 1)
+            else:
+                log.warning("Clipboard busy: could not copy the suggestion")
+            return
+        self.last_copied = text
         self._copied_until = time.monotonic() + 2.5
         self.countdown.configure(text=self.t("copied"), fg=theme.OK)
 

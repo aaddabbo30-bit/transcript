@@ -1,0 +1,41 @@
+# Chiamata dimostrativa (inventata) tra te ("Io") e un'amica, Giulia.
+# Formato: [mm:ss] Nome: testo   — "Io"/"Me" sei tu, qualsiasi altro nome è l'altra persona.
+[00:02] Giulia: Ciao! Finalmente riusciamo a sentirci, come stai?
+[00:06] Io: Ciao Giulia! Tutto bene, un po' di corsa ma bene. Tu?
+[00:10] Giulia: Allora, ho una novità grossa: mi hanno offerto il posto a Milano, quello di cui ti parlavo a settembre.
+[00:17] Io: Ma dai! Quello nello studio di architettura?
+[00:20] Giulia: Sì, proprio quello. Dovrei iniziare il primo dicembre, solo che devo decidere entro venerdì.
+[00:27] Giulia: E sono un po' combattuta, perché vorrebbe dire lasciare Bologna e anche Luca dovrebbe trovare qualcosa lì.
+[00:35] Io: Capisco. E Luca cosa ne pensa?
+[00:38] Giulia: Lui dice che è un'occasione da non perdere, però il suo contratto qui scade a marzo, quindi per tre mesi faremmo avanti e indietro.
+[00:47] Giulia: Tu che hai cambiato città due anni fa, come ti sei trovato i primi mesi?
+[00:52] Io: All'inizio è stata dura, soprattutto per gli amici. Però dopo un paio di mesi mi sono ambientato.
+[00:59] Giulia: Ecco, è quello che mi spaventa di più. A Milano conosco solo mia cugina Sara.
+[01:06] Giulia: Comunque lo stipendio è quasi il doppio e il progetto è il nuovo museo vicino ai Navigli.
+[01:13] Io: Wow, un museo! E' il tipo di progetto che sognavi.
+[01:17] Giulia: Esatto. Ah, e poi devo trovare casa, gli affitti sono assurdi, per un bilocale chiedono mille e quattrocento euro.
+[01:25] Giulia: Ma cambiando discorso, com'è andato il viaggio a Lisbona? Non mi hai più raccontato niente!
+[01:31] Io: Bellissimo, abbiamo mangiato benissimo. Ti ho portato una cosa, te la do quando ci vediamo.
+[01:37] Giulia: Che carino! A proposito, il quattordici novembre faccio la festa per i miei trent'anni, sabato sera da me.
+[01:44] Giulia: Ci tengo tantissimo che venga anche tu. Porta pure Marta se vuole.
+[01:49] Io: Certo che vengo! Segno subito: sabato quattordici.
+[01:53] Giulia: Perfetto. Inizia verso le otto. Se riesci portami quel vino portoghese che avevi assaggiato.
+[02:00] Giulia: Poi un'altra cosa, Pepe non sta benissimo, il veterinario dice che è l'età, ha quasi dodici anni.
+[02:08] Io: Mi dispiace, povero Pepe. Mangia almeno?
+[02:11] Giulia: Sì, mangia, ma dorme tantissimo. Martedì gli fanno le analisi del sangue.
+[02:18] Giulia: Tu invece, al lavoro? Sei riuscito a chiudere quella presentazione per il cliente tedesco?
+[02:24] Io: Quasi, la presento giovedì. Sono un po' in ansia per la parte sui numeri.
+[02:30] Giulia: Dai che vai benissimo, l'ultima volta il tuo capo ti aveva fatto i complimenti.
+[02:36] Giulia: Ah, devo assolutamente consigliarti un libro: Il colibrì di Sandro Veronesi, l'ho finito ieri notte.
+[02:43] Io: Me l'avevano già consigliato, allora lo prendo.
+[02:46] Giulia: Ti presto la mia copia alla festa. Senti, tornando a Milano, secondo te accetto?
+[02:52] Giulia: Cioè, tu al posto mio cosa faresti?
+[02:56] Io: Bella domanda... fammi pensare un attimo.
+[03:00] Giulia: Dimmi sinceramente, eh. Ho bisogno di qualcuno che mi conosce.
+[03:06] Io: Secondo me dovresti accettare, ma magari chiedi se puoi iniziare a gennaio così Luca ha meno mesi da pendolare.
+[03:14] Giulia: Non ci avevo pensato! Posso chiederlo alla responsabile, si chiama Elena Ferri, sembra molto disponibile.
+[03:21] Giulia: Le scrivo domani mattina. Mi hai aiutato tantissimo, davvero.
+[03:26] Io: Figurati. Fammi sapere cosa ti risponde.
+[03:30] Giulia: Certo, ti scrivo appena so qualcosa. E tu in bocca al lupo per giovedì!
+[03:35] Io: Crepi! Ci sentiamo presto, un abbraccio a Luca e a Pepe.
+[03:39] Giulia: Ciao, a presto!

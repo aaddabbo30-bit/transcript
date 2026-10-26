@@ -129,8 +129,12 @@ class ImportMemoryDialog(Dialog):
         theme.button(row, t("btn_memory"), lambda: open_path(memory.root), fonts).pack(side="left")
 
     def _copy_prompt(self) -> None:
-        self.clipboard_clear()
-        self.clipboard_append(self.t("import_prompt"))
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self.t("import_prompt"))
+        except tk.TclError:  # clipboard held by another program (Windows)
+            self.status.configure(text=self.t("import_prompt"), fg=theme.WARN)
+            return
         self.status.configure(text=self.t("copied"), fg=theme.OK)
 
     def _save(self) -> None:

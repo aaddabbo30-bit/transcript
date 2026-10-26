@@ -16,10 +16,62 @@ It knows you through a **personal memory**: a folder of Markdown files (who you 
 
 > The screenshots come from demo mode with sample content (made-up call, scripted answers) rendered by the real app.
 
+**Two ways to use it**
+
+| | **Web app** (nothing to install) | **Windows app** |
+|---|---|---|
+| How | open a link in Chrome or Edge | run `Installa.bat` once, then the desktop icon |
+| Hears the call | microphone + the tab/screen you share with "Share audio" | microphone + everything the PC plays, automatically |
+| Always-on-top window | yes (Chrome/Edge Picture-in-Picture) | yes |
+| Your data | stays in that browser (export a backup any time) | `Documents\Call Assistant` |
+| Guide | [Web app](#0-web-app-no-installation) | [Install](#1-install-step-by-step) |
+
+---
+
+## 0. Web app (no installation)
+
+The `web/` folder is the same assistant as a web page. It is published with GitHub Pages at **`https://<your-github-user>.github.io/<repository>/`**; for this repository that is <https://aaddabbo30-bit.github.io/transcript/>.
+
+To publish it, do this once:
+1. Open the repository's **Settings → Pages** and choose **Source: GitHub Actions**.
+2. Merge into `main`. The *Web app (GitHub Pages)* workflow publishes the page, and does it again on every change.
+
+<p align="center">
+  <img src="docs/web-live.png" alt="The web app during a call" width="560">
+</p>
+
+**Use it**
+
+1. Open the link in **Chrome or Edge on a computer**. Safari, Firefox and phones can't share call audio.
+2. **Impostazioni / Settings**:
+   - paste your Anthropic API key. It is saved only in this browser. Tip: create a dedicated key with a spending limit;
+   - choose the transcription model: `base` is quick; `small` is more accurate but needs a good graphics card.
+3. **Memoria / Memory**: write a few lines about yourself, or use *Import Claude memory*. It works as in the desktop app.
+4. **Chiamata / Call**: choose the language and what to listen to, then press **Avvia / Start**. Chrome asks what to share:
+   - for a call in the browser (Google Meet, Teams on the web…), pick **that tab**;
+   - for a desktop app (WhatsApp, Zoom, Teams), pick **Entire screen**;
+   - either way, turn on **"Share audio"**;
+   - for a call on your phone, put it on speaker and leave only *My microphone* ticked.
+5. The first time, the Whisper model downloads (about 150 MB for `base`). The browser keeps it for next time.
+6. Click **⧉ Always on top**: the live panel moves into a small window that stays above the call.
+7. Press **Stop** at the end:
+   - the summary appears and is saved under **Archivio / History**;
+   - download it as Markdown if you like;
+   - approve the memory proposals.
+
+**What stays where**
+- **Audio**: transcribed inside the browser with Whisper (Transformers.js). It never leaves your computer.
+- **Text sent to Claude**: only the transcript text and your memory.
+- **API key, memory and call history**: stored in that browser's local storage.
+- **Backup**: use *Memory → Export memory* to keep a copy or move it to another computer. On another computer, use *Import backup*; plain `.md` files from the desktop app's memory folder work too.
+
+**Try it without a call**: press *Try it with a sample call*. It works with no API key, using scripted answers, or with your key for real Claude suggestions.
+
 ---
 
 ## Contents
 
+0. [Web app (no installation)](#0-web-app-no-installation)
 1. [Install (step by step)](#1-install-step-by-step)
 2. [Use it during a call](#2-use-it-during-a-call)
 3. [Try it without a call (demo)](#3-try-it-without-a-call-demo)
@@ -262,6 +314,22 @@ To uninstall: close the assistant, double-click **`Disinstalla.bat`**, then dele
 - `session.py`: one call from Start to Stop; worker threads talk to the UI through an event queue.
 - `ui/`: overlay window and dialogs. `simulate.py`: transcript replay for the demo.
 
+### Web app (`web/`)
+
+The web app needs no build step: plain ES modules, served as static files.
+- `js/segmenter.js`, `js/transcript.js` and `js/prompts.js` port the desktop logic: segmentation, filters, echo removal and prompts.
+- `js/audio.js` and `js/audio-worklet.js`: microphone and shared tab/screen audio through an AudioWorklet.
+- `js/whisper-worker.js`: Whisper in a Web Worker with [Transformers.js](https://github.com/huggingface/transformers.js), WebGPU with a WASM fallback, loaded from jsDelivr.
+- `js/claude.js`: the official Anthropic SDK, bundled in `vendor/`, with `dangerouslyAllowBrowser`.
+- `js/session.js`: the call lifecycle.
+- `js/memory.js` and `js/history.js`: local storage.
+
+Run it locally with any static server, for example `python -m http.server -d web`, then open <http://localhost:8000>; `localhost` counts as secure for the microphone.
+
+Tests:
+- `node --test web/tests/unit.test.mjs` runs 16 unit tests, including the real SDK against a mocked `fetch` and full simulated calls.
+- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It needs `playwright`.
+
 ### Run from source
 
 ```bash
@@ -289,7 +357,8 @@ This project is released under the [MIT License](LICENSE). It builds on open-sou
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (MIT), [CTranslate2](https://github.com/OpenNMT/CTranslate2) (MIT), OpenAI [Whisper](https://github.com/openai/whisper) models (MIT), [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, bundled with faster-whisper)
 - [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) (MIT, a PyAudio fork with WASAPI loopback) and [PortAudio](http://www.portaudio.com/) (MIT-style)
-- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [NumPy](https://numpy.org) (BSD-3-Clause)
+- [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [Anthropic TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript) (MIT, bundled in `web/vendor`), [NumPy](https://numpy.org) (BSD-3-Clause)
+- Web app: [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0, loaded from jsDelivr) running the [onnx-community Whisper](https://huggingface.co/onnx-community/whisper-base) models (MIT)
 - The microphone + speaker loopback design was inspired by [ecoute](https://github.com/SevaSk/ecoute) (MIT).
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Call Assistant is an independent project, not affiliated with Anthropic or Proactor.ai.
