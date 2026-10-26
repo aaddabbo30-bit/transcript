@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Tests (Linux, virtual display for the window tests)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          xvfb-run -a python -m pytest
+      - name: Tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest
+
+  installer:
+    name: install.ps1 on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the installer (no questions, no model download)
+        shell: powershell
+        run: .\install.ps1 -NonInteractive -SkipModel
+      - name: Check the shortcuts
+        shell: powershell
+        run: |
+          $shell = New-Object -ComObject WScript.Shell
+          $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Avvia assistente.lnk'
+          $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Call Assistant'
+          $expected = @('Avvia assistente', 'Prova demo', 'Verifica installazione', 'Memoria', 'Chiamate', 'Disinstalla')
+          $links = @($desktop) + ($expected | ForEach-Object { Join-Path $menu "$_.lnk" })
+          foreach ($path in $links) {
+            if (-not (Test-Path -LiteralPath $path)) { Write-Error "missing $path"; exit 1 }
+            $link = $shell.CreateShortcut($path)
+            if (-not (Test-Path -LiteralPath $link.TargetPath)) { Write-Error "$path points to missing $($link.TargetPath)"; exit 1 }
+            Write-Host "$path -> $($link.TargetPath) $($link.Arguments)"
+          }
+      - name: Check the installed environment
+        shell: powershell
+        run: |
+          .\.venv\Scripts\python.exe -c "import pyaudiowpatch, faster_whisper, anthropic, tkinter; import call_assistant.capture_windows; print('imports OK')"
+          .\.venv\Scripts\python.exe -m call_assistant --headless --demo --fake-llm --speed 40 --home "$env:RUNNER_TEMP\ca-home"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem -Recurse "$env:RUNNER_TEMP\ca-home\calls" | Select-Object FullName

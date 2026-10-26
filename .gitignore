@@ -1,0 +1,11 @@
+# Installed by install.ps1
+.venv/
+models/
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# Never commit personal data or keys
+.env
+*.key
