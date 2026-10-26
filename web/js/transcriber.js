@@ -20,7 +20,12 @@ export class WhisperTranscriber {
         else if (msg.type === "ready") {
           this.device = msg.device;
           resolve(msg.device);
-        } else if (msg.type === "error") reject(new Error(msg.message));
+        } else if (msg.type === "error") {
+          const err = new Error(msg.message);
+          // A network failure while downloading the model (blocked site, proxy, offline).
+          if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg.message)) err.code = "model_download";
+          reject(err);
+        }
         else if (msg.type === "result") {
           const done = this.waiting.get(msg.id);
           this.waiting.delete(msg.id);
