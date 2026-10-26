@@ -1,0 +1,15 @@
+[project]
+name = "call-assistant"
+version = "0.1.0"
+description = "Personal live assistant for calls and videos: local Whisper transcription + Claude insights in an always-on-top window."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

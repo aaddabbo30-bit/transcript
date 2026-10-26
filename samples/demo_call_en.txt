@@ -1,0 +1,30 @@
+# Demo call (made up) between you ("Me") and a friend, Tom.
+# Format: [mm:ss] Name: text   — "Me" is you, any other name is the other person.
+[00:02] Tom: Hey! Good to finally catch you. How's everything?
+[00:06] Me: Hey Tom! All good, busy week. How about you?
+[00:10] Tom: Pretty wild, actually. We closed the seed round for the startup on Monday.
+[00:16] Me: No way, congratulations! How much did you raise?
+[00:20] Tom: One point two million, mostly from a fund in Berlin. We can hire three engineers now.
+[00:28] Tom: Which is why I'm calling, partly. Do you still know that designer, the one who did your app?
+[00:35] Me: Priya? Yes, we still talk. She's freelancing now.
+[00:39] Tom: Perfect. Could you introduce us? We need someone for the onboarding flow before January.
+[00:46] Me: Sure, I'll send her a message tonight.
+[00:49] Tom: Amazing. Anyway, enough about work. Are you still training for the Valencia marathon?
+[00:56] Me: I am, it's on December seventh. Long runs are killing me though.
+[01:02] Tom: What's your target time?
+[01:05] Me: Under three forty-five, if my knee holds up.
+[01:09] Tom: You'll do it. Hey, Emma and I are coming to your city the weekend of the twenty-second.
+[01:16] Tom: Any chance we could meet for dinner on Saturday?
+[01:20] Me: Definitely. I know a great Italian place near the river.
+[01:24] Tom: Great, Emma will be happy, she's been learning Italian on Duolingo for months.
+[01:31] Tom: Oh, and she started a new job at the hospital, in pediatrics. She loves it.
+[01:37] Me: That's great news, tell her congrats from me.
+[01:41] Tom: Will do. So what's new with you? Last time you were thinking about switching teams.
+[01:47] Me: Still thinking. The new team does more machine learning, which I like, but I'd lose my manager.
+[01:55] Tom: What's holding you back the most?
+[01:59] Me: Honestly, the risk. My current project ships in February and I want to see it through.
+[02:06] Tom: Makes sense. Maybe ask if you can join after the launch?
+[02:11] Me: Good idea, I could bring it up at my one-on-one next week.
+[02:16] Tom: Exactly. Okay, I have to run to a meeting. Don't forget the intro to Priya!
+[02:22] Me: I won't. And see you on the twenty-second!
+[02:25] Tom: See you, bye!

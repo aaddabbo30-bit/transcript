@@ -1,0 +1,5 @@
+# Runtime dependencies (installed by install.ps1 into .venv)
+anthropic>=2.3,<3
+faster-whisper==1.2.1
+numpy>=1.26
+PyAudioWPatch==0.2.12.9; sys_platform == "win32"
