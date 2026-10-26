@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { currentStamp } from "../tools/stamp.mjs";
 
 // CommonJS require also finds a globally installed Playwright (NODE_PATH).
 const { chromium } = createRequire(import.meta.url)("playwright");
@@ -19,12 +20,15 @@ const FAKE_MIC = process.argv[2] || fileURLToPath(new URL("../../tests/fixtures/
 const SHOTS = process.argv[3] || null;
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".txt": "text/plain" };
 
+const served = []; // every URL the page asked our server for
+
 function serve() {
   const server = createServer(async (req, res) => {
+    served.push(req.url);
     const path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^([/\\])+/, "") || "index.html";
     try {
       const body = await readFile(join(ROOT, path));
-      res.writeHead(200, { "content-type": TYPES[extname(path)] || "application/octet-stream" });
+      res.writeHead(200, { "content-type": TYPES[extname(path)] || "application/octet-stream", "cache-control": "no-store" });
       res.end(body);
     } catch {
       res.writeHead(404);
@@ -206,6 +210,40 @@ await step("memory import of the Claude export and settings", async () => {
   await page.click("#settings-save");
   assert.equal(await page.textContent('[data-tab="memory"]'), "Memory");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-settings.png") });
+  await page.context().close();
+});
+
+await step("every script and the Whisper worker load with the version stamp of index.html", async () => {
+  const { version } = currentStamp();
+  served.length = 0;
+  const page = await newPage("?llm=fake");
+  // A stand-in for Transformers.js, so the worker stops right after its own imports.
+  await page.context().route("https://cdn.jsdelivr.net/npm/@huggingface/transformers@*", (route) =>
+    route.fulfill({
+      headers: { "content-type": "text/javascript", "access-control-allow-origin": "*" },
+      body: "export const env = {}; export async function pipeline() { throw new Error('stub transformers'); }",
+    }),
+  );
+  await page.waitForFunction(() => window.__callAssistant);
+  const loaded = await page.evaluate(async () => {
+    const { WhisperTranscriber } = await import("./js/transcriber.js");
+    const whisper = new WhisperTranscriber();
+    try {
+      return await whisper.load();
+    } catch (err) {
+      return err.message;
+    } finally {
+      whisper.dispose();
+    }
+  });
+  assert.match(loaded, /stub transformers/);
+  const scripts = served.filter((url) => /\.(m?js|css)(\?|$)/.test(url));
+  assert.ok(scripts.includes(`/js/app.js?v=${version}`), scripts.join(" "));
+  assert.ok(scripts.includes(`/js/whisper-worker.js?v=${version}`), scripts.join(" "));
+  assert.ok(scripts.includes(`/vendor/anthropic-sdk.mjs?v=${version}`), scripts.join(" "));
+  // The worker's own import too: workers don't see the page's import map.
+  assert.equal(scripts.filter((url) => url.startsWith("/js/model-files.js")).length, 2, scripts.join(" "));
+  for (const url of scripts) assert.ok(url.endsWith(`?v=${version}`), `${url} has no ?v=${version}`);
   await page.context().close();
 });
 

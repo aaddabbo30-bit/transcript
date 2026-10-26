@@ -3,8 +3,6 @@
 // The model is downloaded once from Hugging Face and cached by the browser, or
 // loaded by hand by the user (see model-files.js).
 
-import { MODEL_REPOS, hasManualModel } from "./model-files.js";
-
 const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
 const LANGUAGES = { it: "italian", en: "english" };
 
@@ -23,6 +21,8 @@ async function pickDevice() {
 }
 
 async function load(modelKey) {
+  // Workers don't see the page's import map: pass on this file's "?v=" (see web/tools/stamp.mjs).
+  const { MODEL_REPOS, hasManualModel } = await import(`./model-files.js${new URL(import.meta.url).search}`);
   const { pipeline, env } = await import(TRANSFORMERS_URL);
   env.allowLocalModels = false;
   // Report which download failed: a bare "Failed to fetch" doesn't say what was blocked.

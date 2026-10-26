@@ -328,11 +328,13 @@ The web app needs no build step: plain ES modules, served as static files.
 - `js/session.js`: the call lifecycle.
 - `js/memory.js` and `js/history.js`: local storage.
 
+After changing anything in `js/`, `vendor/` or `css/`, run `node web/tools/stamp.mjs`. It writes a hash of those files into `index.html` (`?v=…` links plus an import map), so browsers fetch a new version as a whole instead of mixing new and cached files. CI fails when the stamp is out of date.
+
 Run it locally with any static server, for example `python -m http.server -d web`, then open <http://localhost:8000>; `localhost` counts as secure for the microphone.
 
 Tests:
 - `node --test web/tests/unit.test.mjs` runs 16 unit tests, including the real SDK against a mocked `fetch` and full simulated calls.
-- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It needs `playwright`.
+- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It also checks that every script, including the Whisper worker, loads with the current stamp. It needs `playwright`.
 
 ### Run from source
 
