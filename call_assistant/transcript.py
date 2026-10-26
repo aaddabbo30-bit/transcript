@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .audio import ME, THEM
 from .transcriber import normalize
+
+log = logging.getLogger(__name__)
 
 # Labels used in prompts sent to Claude (always English, whatever the UI language).
 PROMPT_LABELS = {ME: "Me", THEM: "Them"}
@@ -86,11 +89,14 @@ class TranscriptStore:
         if not self.path:
             return
         with self._lock:
-            new_file = not self.path.exists()
-            with self.path.open("a", encoding="utf-8") as f:
-                if new_file:
-                    f.write(f"# {self.title}\n\n")
-                f.write(f"- [{fmt_time(line.t)}] **{self.labels.get(line.speaker, line.speaker)}:** {line.text}\n")
+            try:
+                new_file = not self.path.exists()
+                with self.path.open("a", encoding="utf-8") as f:
+                    if new_file:
+                        f.write(f"# {self.title}\n\n")
+                    f.write(f"- [{fmt_time(line.t)}] **{self.labels.get(line.speaker, line.speaker)}:** {line.text}\n")
+            except OSError:  # e.g. OneDrive or antivirus holding the file: it is rewritten at the end
+                log.warning("Could not append to %s", self.path, exc_info=True)
 
     def write_file(self, header: str = "") -> None:
         """Rewrite the file from the final, ordered, echo-free lines (end of call)."""

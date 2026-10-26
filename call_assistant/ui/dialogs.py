@@ -25,10 +25,14 @@ class Dialog(tk.Toplevel):
         self.configure(bg=theme.BG)
         self.attributes("-topmost", True)  # the overlay is topmost: stay above it
         self.transient(parent)
+        # Fonts grow with Windows display scaling (125-200%); the window must too.
+        scale = max(1.0, self.winfo_fpixels("1i") / 96.0)
+        width = int(width * scale)
+        height = int(min(height * scale, self.winfo_screenheight() - 80))
         x = max(0, parent.winfo_rootx() - width - 12)
-        y = max(0, parent.winfo_rooty())
+        y = max(0, min(parent.winfo_rooty(), self.winfo_screenheight() - height - 60))
         self.geometry(f"{width}x{height}+{x}+{y}")
-        self.minsize(380, 260)
+        self.minsize(int(380 * scale), int(260 * scale))
         self.bind("<Escape>", lambda e: self.destroy())
 
     def label(self, parent: tk.Misc, text: str, muted: bool = False, **kw) -> tk.Label:

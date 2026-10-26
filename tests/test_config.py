@@ -37,3 +37,9 @@ def test_translations_have_the_same_keys():
     t = Translator("en")
     assert t("cost", cost="0.010") == "Estimated cost: $0.010"
     assert Translator("xx")("btn_start") == STRINGS["it"]["btn_start"]
+
+
+def test_settings_saved_with_bom_by_notepad(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_bytes(b"\xef\xbb\xbf" + json.dumps({"whisper_model": "medium"}).encode("utf-8"))
+    assert Settings.load(path)["whisper_model"] == "medium"

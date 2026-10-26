@@ -65,3 +65,9 @@ def test_file_is_written_live_and_rewritten_at_the_end(tmp_path):
     store.write_file()
     final = path.read_text(encoding="utf-8")
     assert "**Io:**" not in final and "[00:02] **Altri:** Ciao a tutti quanti voi" in final
+
+
+def test_file_errors_do_not_stop_the_transcript(tmp_path):
+    store = TranscriptStore(tmp_path / "missing-folder" / "transcript.md")  # folder does not exist
+    assert store.add(TranscriptLine(1, "them", "ciao")) is not None
+    assert len(store) == 1

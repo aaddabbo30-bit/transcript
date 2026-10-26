@@ -225,7 +225,10 @@ class TranscriptionWorker:
                 self.on_status("error", f"Whisper: {exc}")
                 continue
             if result.text:
-                self.on_text(chunk, result)
+                try:
+                    self.on_text(chunk, result)
+                except Exception:  # never let one bad line stop the transcription
+                    log.exception("Could not store a transcript line")
 
     def finish(self, timeout: float | None = None) -> bool:
         """Transcribe everything queued, then stop. Returns False on timeout."""

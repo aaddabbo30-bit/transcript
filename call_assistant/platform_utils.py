@@ -52,7 +52,7 @@ def save_api_key(value: str) -> bool:
             winreg.SetValueEx(key, API_KEY_VAR, 0, winreg.REG_SZ, value)
         # Tell Explorer so programs started from now on see the new variable.
         HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x001A, 0x0002
-        result = ctypes.c_ulong()
+        result = ctypes.c_size_t()  # DWORD_PTR
         ctypes.windll.user32.SendMessageTimeoutW(
             HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", SMTO_ABORTIFHUNG, 3000, ctypes.byref(result)
         )

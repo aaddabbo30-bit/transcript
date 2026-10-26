@@ -182,14 +182,19 @@ class WindowsAudioInput:
         offset = clock() - time.monotonic()
 
         def run() -> None:
-            while not self._stop.is_set():
+            while True:
                 try:
                     source, data, t = self._queue.get(timeout=0.2)
                 except queue.Empty:
+                    if self._stop.is_set():
+                        break  # streams closed and everything received was processed
                     continue
-                channels, rate = self._formats[source]
-                samples = resample(pcm16_to_float_mono(data, channels), rate)
-                feed(source, samples, t + offset)
+                try:
+                    channels, rate = self._formats[source]
+                    samples = resample(pcm16_to_float_mono(data, channels), rate)
+                    feed(source, samples, t + offset)
+                except Exception:
+                    log.exception("Audio processing failed for one block")
 
         self._worker = threading.Thread(target=run, name="audio-convert", daemon=True)
         self._worker.start()
@@ -198,7 +203,8 @@ class WindowsAudioInput:
         return self.description + [f"error: {e}" for e in errors]
 
     def stop(self) -> None:
-        self._stop.set()
+        # Close the streams first, then let the worker finish the queued audio,
+        # so the last words of the call are not lost.
         for stream in self._streams:
             try:
                 stream.stop_stream()
@@ -206,8 +212,9 @@ class WindowsAudioInput:
             except Exception:
                 log.debug("Error closing stream", exc_info=True)
         self._streams.clear()
+        self._stop.set()
         if self._worker:
-            self._worker.join(timeout=2)
+            self._worker.join(timeout=5)
         if self._pa is not None:
             try:
                 self._pa.terminate()
@@ -216,8 +223,8 @@ class WindowsAudioInput:
             self._pa = None
 
 
-def measure_levels(seconds: float = 5.0, **kwargs: Any) -> dict[str, float]:
-    """Record for a few seconds and return the peak level per source (diagnostics)."""
+def measure_levels(seconds: float = 5.0, **kwargs: Any) -> tuple[dict[str, float], list[str]]:
+    """Record for a few seconds; returns (peak level per source, opened devices and errors)."""
     peaks: dict[str, float] = {}
 
     def feed(source: str, samples: np.ndarray, t: float | None) -> None:
@@ -231,5 +238,4 @@ def measure_levels(seconds: float = 5.0, **kwargs: Any) -> dict[str, float]:
         time.sleep(seconds)
     finally:
         inp.stop()
-    print("\n".join(devices))
-    return peaks
+    return peaks, devices

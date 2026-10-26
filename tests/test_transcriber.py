@@ -154,3 +154,19 @@ def test_worker_survives_a_failing_chunk():
     worker.submit(AudioChunk("me", AUDIO, 1, 2))
     assert done.wait(2)
     worker.finish(2)
+
+
+def test_worker_survives_a_failing_callback():
+    calls = []
+
+    def on_text(chunk, result):
+        calls.append(result.text)
+        if len(calls) == 1:
+            raise OSError("disk full")
+
+    worker = TranscriptionWorker(ScriptedSpeechToText(["a", "b"]), on_text, lambda: "it")
+    worker.start()
+    worker.submit(AudioChunk("me", AUDIO, 0, 1))
+    worker.submit(AudioChunk("me", AUDIO, 1, 2))
+    assert worker.finish(timeout=5)
+    assert calls == ["a", "b"]

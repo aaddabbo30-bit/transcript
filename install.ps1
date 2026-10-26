@@ -58,15 +58,21 @@ function Ask-YesNo([string]$Question, [bool]$Default) {
 
 # --- Python ----------------------------------------------------------------
 function Test-PythonExe([string]$Exe) {
-    # A usable Python is 3.10-3.13 with tkinter (the window) and venv.
+    # A usable Python is 3.10-3.13, 64-bit x64 (the speech libraries have no ARM64
+    # or 32-bit builds; x64 Python also runs on Windows on ARM), with working Tk and venv.
     if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
+    $probe = "import sys, platform, tkinter, venv; tkinter.Tcl(); " +
+             "ok = (3, 10) <= sys.version_info[:2] <= (3, 13) and platform.machine() == 'AMD64' and sys.maxsize > 2**32; " +
+             "sys.exit(0 if ok else 1)"
     try {
-        & $Exe -c "import sys, tkinter, venv; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 13) else 1)" 2>$null | Out-Null
+        & $Exe -c $probe 2>$null | Out-Null
         return ($LASTEXITCODE -eq 0)
     } catch { return $false }
 }
 
 function Find-Python {
+    # Never let the new "Python install manager" start installing while we only probe.
+    $env:PYTHON_MANAGER_AUTOMATIC_INSTALL = 'false'
     $candidates = New-Object System.Collections.Generic.List[string]
     if (Get-Command py -ErrorAction SilentlyContinue) {
         foreach ($v in '3.12', '3.11', '3.13', '3.10') {
@@ -80,9 +86,10 @@ function Find-Python {
         $candidates.Add((Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe"))
         if ($env:ProgramFiles) { $candidates.Add((Join-Path $env:ProgramFiles "Python$v\python.exe")) }
     }
+    # python on PATH, including Microsoft Store Python. If only the Store *alias* exists,
+    # it just exits with an error when called with arguments, and is skipped.
     $onPath = Get-Command python -ErrorAction SilentlyContinue
-    # Skip the Microsoft Store "python" alias, which only opens the Store.
-    if ($onPath -and $onPath.Source -notlike '*\WindowsApps\*') { $candidates.Add($onPath.Source) }
+    if ($onPath) { $candidates.Add($onPath.Source) }
     foreach ($c in $candidates) { if (Test-PythonExe $c) { return $c } }
     return $null
 }
@@ -92,7 +99,7 @@ function Install-Python {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host '    Uso winget... / Using winget...'
         try {
-            & winget install --id Python.Python.3.12 --exact --scope user --silent --accept-package-agreements --accept-source-agreements | Out-Host
+            & winget install --id Python.Python.3.12 --exact --scope user --architecture x64 --silent --accept-package-agreements --accept-source-agreements | Out-Host
         } catch { Write-Note "winget non ha funzionato / winget failed: $_" }
         $found = Find-Python
         if ($found) { return $found }
@@ -105,6 +112,31 @@ function Install-Python {
     $proc = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru
     if ($proc.ExitCode -ne 0) { Stop-Install "Installazione di Python non riuscita (codice $($proc.ExitCode))." }
     return Find-Python
+}
+
+# --- Microsoft Visual C++ runtime ---------------------------------------------------
+# The speech engine (CTranslate2) and the voice detector (onnxruntime) need it.
+# Most PCs already have it; a freshly installed Windows may not.
+function Test-VCRuntime { return (Test-Path -LiteralPath (Join-Path $env:SystemRoot 'System32\msvcp140_1.dll')) }
+
+function Install-VCRuntime {
+    if (Test-VCRuntime) { return }
+    Write-Step 'Installo Microsoft Visual C++ Runtime / Installing the Visual C++ runtime'
+    Write-Host '    Windows chiederà il permesso di amministratore. / Windows will ask for administrator permission.'
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try {
+            & winget install --id Microsoft.VCRedist.2015+.x64 --exact --silent --accept-package-agreements --accept-source-agreements | Out-Host
+        } catch { Write-Note "winget: $_" }
+    }
+    if (-not (Test-VCRuntime)) {
+        $vcInstaller = Join-Path $env:TEMP 'vc_redist.x64.exe'
+        try {
+            Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $vcInstaller -UseBasicParsing -ErrorAction Stop
+            Start-Process -FilePath $vcInstaller -ArgumentList '/install /quiet /norestart' -Verb RunAs -Wait -ErrorAction Stop
+        } catch { Write-Note "Visual C++ runtime: $_" }
+    }
+    if (Test-VCRuntime) { Write-Ok 'Visual C++ runtime OK' }
+    else { Write-Note 'Installalo a mano / install it manually: https://aka.ms/vs/17/release/vc_redist.x64.exe' }
 }
 
 # --- API key -------------------------------------------------------------------
@@ -165,8 +197,17 @@ Write-Ok "Ambiente / environment: $VenvDir"
 Write-Step 'Installo le librerie (alcuni minuti) / Installing libraries (a few minutes)'
 & $VenvPython -m pip install --upgrade pip --disable-pip-version-check --quiet
 & $VenvPython -m pip install -r (Join-Path $AppDir 'requirements.txt') --disable-pip-version-check
-if ($LASTEXITCODE -ne 0) { Stop-Install 'Installazione delle librerie non riuscita: controlla la connessione a internet.' }
+if ($LASTEXITCODE -ne 0) {
+    Stop-Install 'Installazione delle librerie non riuscita (vedi i messaggi sopra): di solito è la connessione a internet. / Library installation failed (see above), usually the internet connection.'
+}
 Write-Ok 'Librerie installate / libraries installed'
+
+Install-VCRuntime
+& $VenvPython -c "import ctranslate2, onnxruntime, numpy, anthropic, pyaudiowpatch" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Stop-Install 'Le librerie non si avviano: installa Microsoft Visual C++ Runtime (https://aka.ms/vs/17/release/vc_redist.x64.exe), riavvia il PC e rilancia Installa.bat.'
+}
+Write-Ok 'Librerie verificate / libraries checked'
 
 Write-Step 'Chiave API Anthropic / Anthropic API key'
 Write-Host '    Serve per i suggerimenti di Claude. Si crea su https://console.anthropic.com (API Keys).'

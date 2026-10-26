@@ -141,7 +141,7 @@ class Settings:
         stored: dict[str, Any] = {}
         if path.exists():
             try:
-                stored = json.loads(path.read_text(encoding="utf-8"))
+                stored = json.loads(path.read_text(encoding="utf-8-sig"))
                 if not isinstance(stored, dict):
                     raise ValueError("settings.json must contain a JSON object")
             except (OSError, ValueError) as exc:

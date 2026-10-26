@@ -340,6 +340,7 @@ class Overlay:
         self.show_waiting()
         self.topic.configure(text=self.t("waiting_more"))
         self.cost_label.configure(text=format_cost(0))
+        self.events = queue.Queue()
         try:
             self.session = self.make_session(self.events)
             self.session.set_language(LANG_CODES[self.lang_box.current()])

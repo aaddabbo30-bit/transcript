@@ -59,8 +59,9 @@ Keep the key private. The installer stores it as a Windows *user environment var
 1. In the extracted folder, **double-click `Installa.bat`**.
    If Windows shows a security warning (*"Windows protected your PC"* or *"Open File – Security Warning"*), click **More info** → **Run anyway** (or **Run**). It appears because the file comes from the internet; it is a plain script you can open with Notepad to read. The installer then removes this mark from the program's files so it won't ask again.
 2. A blue/black window opens and:
-   - finds Python 3.10–3.13, or installs **Python 3.12** for your user only (via `winget`, or from python.org);
+   - finds a 64-bit Python 3.10–3.13, or installs **Python 3.12** for your user only (via `winget`, or from python.org). On Windows-on-ARM laptops it uses the x64 version, which Windows runs transparently;
    - creates a private environment in the `.venv` folder and installs the libraries;
+   - if the **Microsoft Visual C++ runtime** is missing (rare, mostly on freshly installed PCs), installs it: Windows asks for administrator permission once;
    - asks for your **API key**: paste it with right-click (nothing is shown while you paste, that's normal) and press Enter;
    - asks which **Whisper model** to download: `1` base (older PCs), `2` small (**recommended**), `3` medium (fast PCs);
    - creates the **"Avvia assistente"** icon on your Desktop and in the Start menu.
@@ -215,15 +216,17 @@ Click **⚙** in the window to change the interface language, the Whisper model,
 
 | Problem | Fix |
 |---|---|
-| Nothing appears under "Altri / Them" | The app records the **default playback device**. Check that the call plays through it (Windows sound settings), or set `speaker_device` to part of its name. Bluetooth headsets switch to a separate "Hands-Free" device during calls: make that the default, or use `speaker_device`. |
+| Nothing appears under "Altri / Them" (the window warns you after ~45 s) | The app records the **default playback device**. Call apps (Teams, Zoom, WhatsApp) often play on the *default communication device* instead, and Bluetooth headsets switch to a separate "Hands-Free" device during calls. Make that device the Windows default (Sound settings), choose it in the call app, or type part of its name in ⚙ Settings → *Audio output*. `Verifica installazione.bat` and `.venv\Scripts\python -m call_assistant --list-devices` show the device names. |
 | Nothing appears under "Io / Me" | Check the microphone in Windows privacy settings (*Let desktop apps access your microphone*), and that it's the default input device, or set `microphone_device`. |
 | The same sentence appears twice | Use headphones. Most echoes are removed automatically. |
 | "Your PC can't keep up…" | Choose the `base` model in ⚙ Settings. |
 | "API key not valid" or "credit balance too low" | Check the key and the credit on console.anthropic.com; enter a new key from ⚙ → *API key…*. |
-| The window doesn't open | Run `Verifica installazione.bat`, and look at `Documents\Call Assistant\logs\app.log`. Running `Installa.bat` again repairs most problems. |
+| The window doesn't open | Run `Verifica installazione.bat`, and look at `Documents\Call Assistant\logs\app.log` (or `%LOCALAPPDATA%\Call Assistant\logs` if Documents isn't writable). Running `Installa.bat` again repairs most problems. |
+| "Le librerie non si avviano / libraries don't start" during install | Install the [Microsoft Visual C++ runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe), restart the PC and run `Installa.bat` again. |
+| A device was plugged in or out during the call | Press Stop and Start again: the app picks the devices when a call starts. |
 | Wrong language in the transcript | Pick the exact language instead of *Auto*. |
 
-To uninstall: run `uninstall.ps1` (right-click → *Run with PowerShell*), then delete the program folder. Your data in `Documents\Call Assistant` is kept.
+To uninstall: close the assistant, double-click **`Disinstalla.bat`**, then delete the program folder. Your data in `Documents\Call Assistant` is kept.
 
 ---
 
@@ -264,8 +267,9 @@ python -m call_assistant --check | --list-devices | --download-model small
 
 This project was built in a cloud environment without a sound card, without Windows and without access to the Whisper model downloads. So:
 
-- **Tested automatically** (76 tests): resampling (including 48 kHz stereo, like WASAPI loopback), segmentation on synthetic signals and on real synthesized Italian/English speech, the Whisper wrapper (with a stand-in model: language handling, CPU fallback, hallucination filters), transcript echo removal, the real `anthropic` SDK request/response path against a mocked HTTP server (request shape, caching, structured outputs, fallbacks, errors), cost estimates, memory (templates, import, path validation, approvals), full simulated calls from transcript and from audio, and the real Tk window under a virtual display (start, live updates, click-to-copy, stop, summary, memory approval).
+- **Tested automatically** (81 tests): resampling (including 48 kHz stereo, like WASAPI loopback), segmentation on synthetic signals and on real synthesized Italian/English speech, the Whisper wrapper (with a stand-in model: language handling, CPU fallback, hallucination filters), transcript echo removal, the real `anthropic` SDK request/response path against a mocked HTTP server (request shape, caching, structured outputs, fallbacks, errors), cost estimates, memory (templates, import, path validation, approvals), full simulated calls from transcript and from audio, and the real Tk window under a virtual display (start, live updates, click-to-copy, stop, summary, memory approval).
 - **CI on GitHub Actions** (`.github/workflows/ci.yml`) runs the tests on Linux and Windows and runs `install.ps1` non-interactively on a Windows runner.
+- **Reviewed, not executed**: the Windows-only code (installer, WASAPI capture, registry and shortcut code) was checked line by line against the PyAudioWPatch source and Windows PowerShell 5.1 rules.
 - **Needs a real Windows PC to verify**: live capture from your microphone and speakers, actual Whisper transcription quality/speed on your hardware, and the desktop shortcut. `Verifica installazione.bat` checks the first two quickly.
 
 ---

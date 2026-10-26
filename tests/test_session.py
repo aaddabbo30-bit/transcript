@@ -114,3 +114,36 @@ def test_auth_error_disables_live_insights(settings, paths):
     assert session.next_insight_in() is None  # disabled after a 401
     session.stop(wait=True)
     assert any(k == "insight_error" for k, _ in drain(events))
+
+
+class SilentPcAudio:
+    """Stands in for the live capture: only the microphone produces speech."""
+
+    capture_system_audio = True
+
+    def start(self, feed, clock):
+        return ["mic: test", "PC: test"]
+
+    def stop(self):
+        pass
+
+
+def test_warns_when_pc_audio_stays_silent(settings, paths):
+    from call_assistant.transcript import TranscriptLine
+
+    events: queue.Queue = queue.Queue()
+    now = [0.0]
+    session = CallSession(settings=settings, paths=paths, llm=None, audio_input=SilentPcAudio(),
+                          speech=ScriptedSpeechToText(), events=events, clock=lambda: now[0])
+    session.start()
+    for i in range(3):
+        session.add_line(TranscriptLine(i * 5.0, "me", f"pronto, mi senti? {i}"))
+    now[0] = 30.0
+    session._check_pc_audio()
+    assert not session._pc_audio_warned  # too early
+    now[0] = 60.0
+    session._check_pc_audio()
+    assert session._pc_audio_warned
+    session.stop(wait=True)
+    warnings = [p for k, p in drain(events) if k == "warning"]
+    assert any("audio del PC" in w for w in warnings)

@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 
 MIN_WORDS_FOR_FIRST_INSIGHT = 12
 BACKLOG_WARNING = 6
+SILENT_PC_AUDIO_AFTER_S = 45  # mic lines but no PC-audio lines after this long: wrong output device?
 
 
 class CallSession:
@@ -82,6 +83,7 @@ class CallSession:
         self._last_insight_at = 0.0
         self._insights_disabled = False
         self._backlog_warned = False
+        self._pc_audio_warned = False
         self.worker: TranscriptionWorker | None = None
         self.router: AudioRouter | None = None
         self.result: SummaryResult | None = None
@@ -191,10 +193,21 @@ class CallSession:
                     self.emit("warning", self.t("backlog", n=backlog))
                 elif backlog < 2:
                     self._backlog_warned = False
+            self._check_pc_audio()
             if self._insight_due():
                 self._insight_busy.set()
                 self.emit("insight_pending")
                 threading.Thread(target=self._run_insight, name="insight", daemon=True).start()
+
+    def _check_pc_audio(self) -> None:
+        if self._pc_audio_warned or not getattr(self.audio_input, "capture_system_audio", False):
+            return
+        if self.elapsed() < SILENT_PC_AUDIO_AFTER_S:
+            return
+        lines = self.store.lines()
+        if sum(1 for ln in lines if ln.speaker == ME) >= 3 and not any(ln.speaker == THEM for ln in lines):
+            self._pc_audio_warned = True
+            self.emit("warning", self.t("no_system_audio"))
 
     def _insight_due(self) -> bool:
         if self.insights is None or self._insights_disabled or self._insight_busy.is_set() or self._stopping:

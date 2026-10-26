@@ -98,7 +98,7 @@ class Memory:
         parts = []
         for path in self.files():
             try:
-                body = self._clean(path.read_text(encoding="utf-8", errors="replace"))
+                body = self._clean(path.read_text(encoding="utf-8-sig", errors="replace"))
             except OSError:
                 log.warning("Cannot read %s", path)
                 continue
@@ -138,7 +138,7 @@ class Memory:
         stamp = dt.date.today().isoformat()
         note = f"<!-- added {stamp}{' from ' + source if source else ''} -->\n"
         if path.exists():
-            existing = path.read_text(encoding="utf-8", errors="replace")
+            existing = path.read_text(encoding="utf-8-sig", errors="replace")
             sep = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
             path.write_text(existing + sep + note + content + "\n", encoding="utf-8")
         else:
@@ -156,7 +156,7 @@ class Memory:
         self.root.mkdir(parents=True, exist_ok=True)
         header = f"## Import {dt.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
         if path.exists():
-            existing = path.read_text(encoding="utf-8", errors="replace").rstrip()
+            existing = path.read_text(encoding="utf-8-sig", errors="replace").rstrip()
             path.write_text(f"{existing}\n\n{header}{text}\n", encoding="utf-8")
         else:
             path.write_text(f"# Claude memory export\n\n{header}{text}\n", encoding="utf-8")

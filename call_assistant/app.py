@@ -236,16 +236,28 @@ def check(settings: Settings, paths: Paths) -> int:
             from .capture_windows import measure_levels
 
             print("\nRecording 5 seconds: say something and play some audio on the PC...")
-            peaks = measure_levels(
+            peaks, devices = measure_levels(
                 5.0,
                 capture_microphone=settings["capture_microphone"],
                 capture_system_audio=settings["capture_system_audio"],
                 microphone_hint=settings["microphone_device"],
                 speaker_hint=settings["speaker_device"],
             )
-            for source, label in (("me", "Microphone"), ("them", "PC audio")):
+            for line in devices:
+                print(f"  {line}")
+                if line.startswith("error:"):
+                    ok = False
+            enabled = (("me", "Microphone", settings["capture_microphone"]),
+                       ("them", "PC audio", settings["capture_system_audio"]))
+            for source, label, on in enabled:
+                if not on:
+                    continue
                 level = peaks.get(source)
-                verdict = "no data (silence?)" if level is None else ("OK" if level > 0.01 else "very quiet")
+                if level is None:
+                    ok = False
+                    verdict = "NO DATA - check the device (and that something was playing / you spoke)"
+                else:
+                    verdict = "OK" if level > 0.01 else "very quiet"
                 print(f"  {label}: peak {0 if level is None else level:.3f} -> {verdict}")
         except Exception as exc:
             ok = False
@@ -317,14 +329,32 @@ def _prepare_environment() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 
+def open_paths(args: argparse.Namespace) -> Paths:
+    """The data folder; falls back to %LOCALAPPDATA% if Documents is not writable
+    (offline redirected folder, Defender "Controlled folder access", ...)."""
+    import os
+
+    home = Path(args.home).expanduser() if args.home else default_home()
+    try:
+        return Paths(home).ensure()
+    except OSError:
+        local = os.environ.get("LOCALAPPDATA")
+        if args.home or not local:
+            raise
+        fallback = Paths(Path(local) / "Call Assistant").ensure()
+        logging.getLogger("call_assistant").warning("Cannot write to %s; using %s", home, fallback.home)
+        return fallback
+
+
 def main(argv: list[str] | None = None) -> int:
     _prepare_environment()
     args = parse_args(argv)
-    paths = Paths(Path(args.home).expanduser() if args.home else default_home()).ensure()
-    log_file = setup_logging(paths, args.verbose)
-    settings = Settings.load(paths.settings_file)
-    log.info("Starting %s (args=%s)", __version__, vars(args))
+    log_file: Path | None = None
     try:
+        paths = open_paths(args)
+        log_file = setup_logging(paths, args.verbose)
+        settings = Settings.load(paths.settings_file)
+        log.info("Starting %s (args=%s, data=%s)", __version__, vars(args), paths.home)
         if args.check:
             return check(settings, paths)
         if args.list_devices:
@@ -347,8 +377,9 @@ def main(argv: list[str] | None = None) -> int:
 
             r = tk.Tk()
             r.withdraw()
-            messagebox.showerror("Call Assistant", f"{exc}\n\nDetails: {log_file}")
+            details = f"\n\nDetails: {log_file}" if log_file else ""
+            messagebox.showerror("Call Assistant", f"{exc}{details}")
             r.destroy()
         except Exception:
-            print(f"Error: {exc} (details: {log_file})", file=sys.stderr)
+            print(f"Error: {exc} (details: {log_file or '-'})", file=sys.stderr)
         return 1
