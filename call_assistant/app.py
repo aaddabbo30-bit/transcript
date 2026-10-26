@@ -355,6 +355,9 @@ def main(argv: list[str] | None = None) -> int:
         log_file = setup_logging(paths, args.verbose)
         settings = Settings.load(paths.settings_file)
         log.info("Starting %s (args=%s, data=%s)", __version__, vars(args), paths.home)
+        from .memory import Memory
+
+        Memory(paths.memory, settings["ui_language"]).ensure()  # starter files, so the folder is never empty
         if args.check:
             return check(settings, paths)
         if args.list_devices:

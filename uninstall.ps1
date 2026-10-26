@@ -13,6 +13,8 @@ foreach ($folder in @([Environment]::GetFolderPath('Desktop'), [Environment]::Ge
     $link = Join-Path $folder 'Avvia assistente.lnk'
     if (Test-Path -LiteralPath $link) { Remove-Item -LiteralPath $link -Force; Write-Host "Rimosso / removed: $link" }
 }
+$menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Call Assistant'
+if (Test-Path -LiteralPath $menu) { Remove-Item -LiteralPath $menu -Recurse -Force; Write-Host "Rimosso / removed: $menu" }
 foreach ($sub in @('.venv', 'models')) {
     $path = Join-Path $AppDir $sub
     if (Test-Path -LiteralPath $path) {

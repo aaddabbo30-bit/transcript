@@ -150,13 +150,14 @@ function Read-ApiKey {
 }
 
 # --- Shortcuts -------------------------------------------------------------------
-function New-Shortcut([string]$Path, [string]$Target, [string]$Arguments, [string]$Description) {
+function New-Shortcut([string]$Path, [string]$Target, [string]$Arguments, [string]$Description, [string]$Icon = '') {
     $shell = New-Object -ComObject WScript.Shell -ErrorAction Stop
     $link = $shell.CreateShortcut($Path)
     $link.TargetPath = $Target
     $link.Arguments = $Arguments
     $link.WorkingDirectory = $AppDir
-    $link.IconLocation = (Join-Path $AppDir 'assets\icon.ico') + ',0'
+    if (-not $Icon) { $Icon = (Join-Path $AppDir 'assets\icon.ico') + ',0' }
+    $link.IconLocation = $Icon
     $link.Description = $Description
     $link.Save()
 }
@@ -258,11 +259,28 @@ if (-not $SkipShortcut) {
     Write-Step 'Creo le icone / Creating shortcuts'
     $desktop = [Environment]::GetFolderPath('Desktop')
     $programs = [Environment]::GetFolderPath('Programs')
-    $description = 'Assistente per chiamate e video (Whisper + Claude)'
+    $menu = Join-Path $programs 'Call Assistant'
+    # Your data folder (memory, call summaries): the same one the app uses.
+    $dataDir = if ($env:CALL_ASSISTANT_HOME) { $env:CALL_ASSISTANT_HOME } else { Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Call Assistant' }
+    $memoryDir = Join-Path $dataDir 'memory'
+    $callsDir = Join-Path $dataDir 'calls'
+    $folderIcon = (Join-Path $env:SystemRoot 'System32\shell32.dll') + ',3'
     try {
-        New-Shortcut (Join-Path $desktop "$ShortcutName.lnk") $VenvPythonW '-m call_assistant' $description
-        New-Shortcut (Join-Path $programs "$ShortcutName.lnk") $VenvPythonW '-m call_assistant' $description
-        Write-Ok "Desktop e menu Start: '$ShortcutName'"
+        foreach ($dir in @($menu, $memoryDir, $callsDir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        $legacy = Join-Path $programs "$ShortcutName.lnk"   # created by older versions of this installer
+        if (Test-Path -LiteralPath $legacy) { Remove-Item -LiteralPath $legacy -Force }
+
+        # Desktop: the one icon you need during calls.
+        New-Shortcut (Join-Path $desktop "$ShortcutName.lnk") $VenvPythonW '-m call_assistant' 'Assistente per chiamate e video (Whisper + Claude)'
+        # Start menu > Call Assistant: every tool of the project.
+        New-Shortcut (Join-Path $menu "$ShortcutName.lnk") $VenvPythonW '-m call_assistant' 'Assistente per chiamate e video (Whisper + Claude)'
+        New-Shortcut (Join-Path $menu 'Prova demo.lnk') $VenvPythonW '-m call_assistant --demo --speed 2' 'Prova senza chiamata: riproduce una conversazione di esempio'
+        New-Shortcut (Join-Path $menu 'Verifica installazione.lnk') (Join-Path $AppDir 'Verifica installazione.bat') '' 'Controlla Python, Whisper, chiave API e audio'
+        New-Shortcut (Join-Path $menu 'Memoria.lnk') $memoryDir '' 'La tua memoria personale (file Markdown)' $folderIcon
+        New-Shortcut (Join-Path $menu 'Chiamate.lnk') $callsDir '' 'Riassunti e trascrizioni delle chiamate' $folderIcon
+        New-Shortcut (Join-Path $menu 'Disinstalla.lnk') (Join-Path $AppDir 'Disinstalla.bat') '' 'Rimuove il programma (i tuoi dati restano)'
+        Write-Ok "Desktop: '$ShortcutName'"
+        Write-Ok "Menu Start > Call Assistant: $ShortcutName, Prova demo, Verifica installazione, Memoria, Chiamate, Disinstalla"
     } catch {
         Write-Note "Icone non create / shortcuts not created: $_  (usa 'Avvia assistente.bat')"
     }

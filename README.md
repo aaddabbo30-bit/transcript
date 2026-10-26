@@ -64,7 +64,16 @@ Keep the key private. The installer stores it as a Windows *user environment var
    - if the **Microsoft Visual C++ runtime** is missing (rare, mostly on freshly installed PCs), installs it: Windows asks for administrator permission once;
    - asks for your **API key**: paste it with right-click (nothing is shown while you paste, that's normal) and press Enter;
    - asks which **Whisper model** to download: `1` base (older PCs), `2` small (**recommended**), `3` medium (fast PCs);
-   - creates the **"Avvia assistente"** icon on your Desktop and in the Start menu.
+   - creates the **"Avvia assistente"** icon on your Desktop, and a **Call Assistant** folder in the Start menu with a shortcut for every tool:
+
+     | Shortcut | What it does |
+     |---|---|
+     | **Avvia assistente** | opens the assistant window (the one to use for calls) |
+     | **Prova demo** | replays a sample conversation, to try it without a call |
+     | **Verifica installazione** | checks Whisper, the API key and the audio devices |
+     | **Memoria** | opens your personal memory folder |
+     | **Chiamate** | opens the folder with your call summaries and transcripts |
+     | **Disinstalla** | removes the program (your data is kept) |
 3. At the end it offers to start the assistant.
 
 You can run `Installa.bat` again at any time: it repairs or updates the installation without losing anything.
@@ -78,7 +87,7 @@ Double-click **`Verifica installazione.bat`**. It checks Python, the Whisper mod
 ## 2. Use it during a call
 
 1. **Wear headphones** if you can. Without them your microphone also hears the other people through the speakers; the app removes most of these echoes, but headphones give a cleaner transcript.
-2. Double-click **"Avvia assistente"** on the Desktop. The window opens at the top-right of the screen and stays above other windows (the ◆ button turns that off).
+2. Double-click **"Avvia assistente"** on the Desktop (or Start menu → *Call Assistant* → *Avvia assistente*). Tip: right-click the icon → *Pin to taskbar* to have it one click away. The window opens at the top-right of the screen and stays above other windows (the ◆ button turns that off).
 3. Pick the **language** of the call: *Auto (Italian + English)*, *Italiano* or *English*. You can change it during the call.
 4. Press **▶ Avvia (Start)** when the call begins. Works with any app: WhatsApp, Teams, Zoom, Meet, FaceTime on the web, YouTube…
 5. The window shows:

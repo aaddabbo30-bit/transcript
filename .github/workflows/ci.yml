@@ -36,9 +36,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run the installer (no questions, no model download, no shortcuts)
+      - name: Run the installer (no questions, no model download)
         shell: powershell
-        run: .\install.ps1 -NonInteractive -SkipModel -SkipShortcut
+        run: .\install.ps1 -NonInteractive -SkipModel
+      - name: Check the shortcuts
+        shell: powershell
+        run: |
+          $shell = New-Object -ComObject WScript.Shell
+          $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Avvia assistente.lnk'
+          $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Call Assistant'
+          $expected = @('Avvia assistente', 'Prova demo', 'Verifica installazione', 'Memoria', 'Chiamate', 'Disinstalla')
+          $links = @($desktop) + ($expected | ForEach-Object { Join-Path $menu "$_.lnk" })
+          foreach ($path in $links) {
+            if (-not (Test-Path -LiteralPath $path)) { Write-Error "missing $path"; exit 1 }
+            $link = $shell.CreateShortcut($path)
+            if (-not (Test-Path -LiteralPath $link.TargetPath)) { Write-Error "$path points to missing $($link.TargetPath)"; exit 1 }
+            Write-Host "$path -> $($link.TargetPath) $($link.Arguments)"
+          }
       - name: Check the installed environment
         shell: powershell
         run: |
