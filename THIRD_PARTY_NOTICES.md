@@ -1,6 +1,6 @@
 # Third-party notices
 
-Call Assistant does not include third-party source code. It installs and uses
+Apart from the bundled SDK listed below, Call Assistant does not include third-party source code. It installs and uses
 the following open-source packages and models, each under its own license.
 Their license texts are installed with them (in `.venv`) or published at the
 links below.
@@ -16,6 +16,9 @@ links below.
 | [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) | Claude API client | Apache-2.0 |
 | [NumPy](https://numpy.org) | audio processing | BSD-3-Clause |
 | Python, Tcl/Tk | runtime and window toolkit | PSF License, Tcl/Tk license (BSD-style) |
+| [Anthropic TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript) 0.137.0 | Claude API client of the web app, bundled in `web/vendor/anthropic-sdk.mjs` (license in `web/vendor/LICENSE-anthropic-sdk.txt`) | MIT |
+| [Transformers.js](https://github.com/huggingface/transformers.js) 4.3.1 | Whisper in the browser (web app), loaded from jsDelivr | Apache-2.0 |
+| [onnx-community/whisper-base / whisper-small](https://huggingface.co/onnx-community/whisper-base) | Whisper models for the web app, downloaded by the browser | MIT |
 
 Design inspiration (no code copied): [ecoute](https://github.com/SevaSk/ecoute)
 (MIT) records the microphone and the speaker loopback in parallel and suggests

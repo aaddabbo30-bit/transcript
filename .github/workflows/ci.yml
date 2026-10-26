@@ -74,3 +74,19 @@ jobs:
           .\.venv\Scripts\python.exe -m call_assistant --headless --demo --fake-llm --speed 40 --home "$env:RUNNER_TEMP\ca-home"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Get-ChildItem -Recurse "$env:RUNNER_TEMP\ca-home\calls" | Select-Object FullName
+
+  web:
+    name: Web app (Node + Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Unit tests
+        run: node --test web/tests/unit.test.mjs
+      - name: Browser end-to-end test (fake microphone, mocked Claude API)
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          node web/tests/e2e.mjs

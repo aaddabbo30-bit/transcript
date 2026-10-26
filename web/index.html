@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assistente chiamate</title>
+  <meta name="description" content="Assistente personale per chiamate e video: trascrizione nel browser con Whisper e suggerimenti live da Claude.">
+  <link rel="icon" href="assets/icon.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <img src="assets/icon.png" alt="" class="logo">
+    <h1 data-t="app_title">Assistente chiamate</h1>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="call" class="active" data-t="tab_call">Chiamata</button>
+      <button role="tab" data-tab="memory" data-t="tab_memory">Memoria</button>
+      <button role="tab" data-tab="history" data-t="tab_history">Archivio</button>
+      <button role="tab" data-tab="settings" data-t="tab_settings">Impostazioni</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- CALL -->
+    <section id="tab-call" class="tab active">
+      <div id="setup" class="card">
+        <p id="key-missing" class="notice warn hidden"></p>
+        <label class="field">
+          <span data-t="language">Lingua della chiamata</span>
+          <select id="call-language">
+            <option value="auto" data-t="lang_auto">Auto</option>
+            <option value="it" data-t="lang_it">Italiano</option>
+            <option value="en" data-t="lang_en">English</option>
+          </select>
+        </label>
+        <fieldset class="field">
+          <legend data-t="sources">Cosa ascoltare</legend>
+          <label class="check"><input type="checkbox" id="src-mic" checked> <span data-t="src_mic"></span></label>
+          <label class="check"><input type="checkbox" id="src-shared" checked> <span data-t="src_shared"></span></label>
+          <p class="hint" data-t="src_hint"></p>
+        </fieldset>
+        <div class="row">
+          <button id="start" class="primary big" data-t="btn_start">▶ Avvia</button>
+          <button id="demo" class="ghost" data-t="btn_demo">Demo</button>
+        </div>
+        <p class="hint" data-t="privacy"></p>
+      </div>
+
+      <div id="live" class="panel hidden">
+        <div class="panel-head">
+          <span id="status-dot" class="dot"></span>
+          <strong id="status">Pronto</strong>
+          <span id="timer" class="muted">00:00</span>
+          <span class="spacer"></span>
+          <span id="cost" class="muted small" title="">$0.0000</span>
+          <button id="pip" class="ghost small" data-t="btn_pip">⧉</button>
+          <button id="stop" class="danger" data-t="btn_stop">■ Stop</button>
+        </div>
+        <div class="panel-sub">
+          <select id="live-language" aria-label="language">
+            <option value="auto" data-t="lang_auto">Auto</option>
+            <option value="it" data-t="lang_it">Italiano</option>
+            <option value="en" data-t="lang_en">English</option>
+          </select>
+          <span id="audio-info" class="muted small"></span>
+        </div>
+        <p id="notice" class="notice hidden"></p>
+        <div class="section-head"><span data-t="sec_topic"></span><span class="spacer"></span><span id="countdown" class="muted small"></span><button id="refresh" class="icon" data-t="btn_refresh">↻</button></div>
+        <p id="topic" class="topic"></p>
+        <div class="section-head"><span data-t="sec_suggestions"></span><span class="spacer"></span><span class="faint small" data-t="click_to_copy"></span></div>
+        <div id="suggestions"></div>
+        <div class="section-head"><span data-t="sec_remember"></span></div>
+        <ul id="remember" class="remember"></ul>
+        <div class="section-head"><span data-t="sec_transcript"></span></div>
+        <div id="transcript" class="transcript" aria-live="off"></div>
+      </div>
+
+      <div id="summary" class="card hidden">
+        <h2 id="summary-title"></h2>
+        <p id="summary-meta" class="muted small"></p>
+        <p id="summary-error" class="notice warn hidden"></p>
+        <div id="summary-body" class="prewrap"></div>
+        <div id="summary-lists"></div>
+        <div class="row">
+          <button id="dl-summary" data-t="download_summary"></button>
+          <button id="dl-transcript" data-t="download_transcript"></button>
+          <button id="new-call" class="primary" data-t="btn_new_call"></button>
+        </div>
+        <div id="review" class="hidden">
+          <h3 data-t="review_title"></h3>
+          <p class="hint" data-t="review_text"></p>
+          <div id="proposals"></div>
+          <div class="row"><button id="apply-proposals" class="primary" data-t="review_apply"></button><span id="review-status" class="muted small"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MEMORY -->
+    <section id="tab-memory" class="tab">
+      <div class="card">
+        <p class="hint" data-t="mem_where"></p>
+        <div class="row">
+          <label class="field grow"><span data-t="mem_files"></span><select id="mem-file"></select></label>
+          <button id="mem-new" data-t="mem_new"></button>
+          <button id="mem-delete" class="ghost" data-t="mem_delete"></button>
+        </div>
+        <textarea id="mem-text" rows="14" spellcheck="true"></textarea>
+        <div class="row"><button id="mem-save" class="primary" data-t="mem_save"></button><span id="mem-status" class="muted small"></span></div>
+      </div>
+      <div class="card">
+        <h3 data-t="mem_import_title"></h3>
+        <p class="hint" data-t="mem_import_text"></p>
+        <blockquote id="import-prompt" class="prompt"></blockquote>
+        <button id="copy-prompt" data-t="copy_prompt"></button>
+        <textarea id="import-text" rows="8"></textarea>
+        <div class="row"><button id="import-save" class="primary" data-t="import_save"></button><span id="import-status" class="muted small"></span></div>
+      </div>
+      <div class="card">
+        <h3 data-t="mem_backup"></h3>
+        <div class="row">
+          <button id="mem-export" data-t="mem_export"></button>
+          <label class="button"><span data-t="mem_import_backup"></span><input id="mem-import-file" type="file" accept=".md,text/markdown,text/plain" hidden></label>
+          <span id="backup-status" class="muted small"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="tab-history" class="tab">
+      <div id="history" class="card"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="tab">
+      <div class="card">
+        <label class="field"><span data-t="settings_key"></span><input id="api-key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
+        <p class="hint" data-t="settings_key_hint"></p>
+        <div class="row"><button id="key-save" class="primary" data-t="settings_key_save"></button><button id="key-forget" class="ghost" data-t="settings_key_forget"></button><span id="key-status" class="muted small"></span></div>
+      </div>
+      <div class="card">
+        <label class="field"><span data-t="settings_whisper"></span>
+          <select id="whisper-model"><option value="base">base</option><option value="small">small</option></select>
+        </label>
+        <p class="hint" data-t="settings_whisper_hint"></p>
+        <label class="field"><span data-t="settings_interval"></span><input id="interval" type="number" min="10" max="120" step="5"></label>
+        <label class="field"><span data-t="settings_summary_model"></span>
+          <select id="summary-model">
+            <option value="claude-opus-5-5">Claude Opus 5.5</option>
+            <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
+          </select>
+        </label>
+        <label class="field"><span data-t="settings_ui"></span>
+          <select id="ui-language"><option value="it">Italiano</option><option value="en">English</option></select>
+        </label>
+        <div class="row"><button id="settings-save" class="primary" data-t="mem_save"></button><span id="settings-status" class="muted small"></span></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
