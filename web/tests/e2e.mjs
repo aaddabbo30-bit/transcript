@@ -99,6 +99,8 @@ async function step(name, fn) {
   } catch (err) {
     failed = true;
     console.log(`not ok - ${name}\n  ${String(err.stack || err).split("\n").slice(0, 6).join("\n  ")}`);
+    // On GitHub, also an annotation: readable on the check without opening the log.
+    if (process.env.GITHUB_ACTIONS) console.log(`::error title=e2e: ${name}::${String(err.message || err).split("\n")[0].slice(0, 300)}`);
   }
 }
 
@@ -177,13 +179,14 @@ await step("live microphone -> scripted Whisper -> transcript -> «Ask Claude» 
 });
 
 await step("always-on-top window: the live panel keeps updating there, and Stop works from it", async () => {
-  const page = await newPage("?speed=25");
+  // At x5 the demo lasts ~45 s: still running however slowly the window opens.
+  const page = await newPage("?speed=5");
   await page.click("#demo");
   await page.waitForSelector("#transcript .line");
   const [pip] = await Promise.all([page.context().waitForEvent("page"), page.click("#pip")]);
   await pip.waitForSelector("#live #transcript");
   const before = await pip.evaluate(() => document.querySelectorAll("#transcript .line").length);
-  await pip.waitForFunction((n) => document.querySelectorAll("#transcript .line").length > n + 5, before, { timeout: 15000 });
+  await pip.waitForFunction((n) => document.querySelectorAll("#transcript .line").length > n + 2, before, { timeout: 20000 });
   await pip.waitForFunction(() => document.getElementById("timer").textContent !== "00:00", null, { timeout: 5000 });
   await pip.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
