@@ -12,7 +12,9 @@ export class WhisperTranscriber {
 
   load() {
     if (this.loading) return this.loading;
-    this.worker = new Worker(new URL("./whisper-worker.js", import.meta.url), { type: "module" });
+    // import.meta.resolve applies the page's import map: the worker of the same version.
+    const url = import.meta.resolve ? import.meta.resolve("./whisper-worker.js") : new URL("./whisper-worker.js", import.meta.url);
+    this.worker = new Worker(url, { type: "module" });
     this.loading = new Promise((resolve, reject) => {
       this.worker.onmessage = (e) => {
         const msg = e.data;

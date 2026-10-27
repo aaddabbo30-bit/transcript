@@ -66,7 +66,9 @@ export class BrowserAudioCapture {
     }
 
     this.ctx = new AudioContext();
-    await this.ctx.audioWorklet.addModule(new URL("./audio-worklet.js", import.meta.url));
+    await this.ctx.audioWorklet.addModule(
+      import.meta.resolve ? import.meta.resolve("./audio-worklet.js") : new URL("./audio-worklet.js", import.meta.url),
+    );
     if (this.ctx.state === "suspended") await this.ctx.resume();
     const sink = this.ctx.createGain();
     sink.gain.value = 0; // keeps the graph running without playing anything back

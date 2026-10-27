@@ -6,7 +6,11 @@
   <title>Assistente chiamate</title>
   <meta name="description" content="Assistente personale per chiamate e video: trascrizione nel browser con Whisper e suggerimenti live da Claude.">
   <link rel="icon" href="assets/icon.png">
-  <link rel="stylesheet" href="css/app.css">
+  <!-- stamp:start -->
+  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=b57d1db2b7","./js/audio-worklet.js":"./js/audio-worklet.js?v=b57d1db2b7","./js/audio.js":"./js/audio.js?v=b57d1db2b7","./js/bridge.js":"./js/bridge.js?v=b57d1db2b7","./js/claude.js":"./js/claude.js?v=b57d1db2b7","./js/history.js":"./js/history.js?v=b57d1db2b7","./js/i18n.js":"./js/i18n.js?v=b57d1db2b7","./js/memory.js":"./js/memory.js?v=b57d1db2b7","./js/model-files.js":"./js/model-files.js?v=b57d1db2b7","./js/prompts.js":"./js/prompts.js?v=b57d1db2b7","./js/segmenter.js":"./js/segmenter.js?v=b57d1db2b7","./js/session.js":"./js/session.js?v=b57d1db2b7","./js/transcriber.js":"./js/transcriber.js?v=b57d1db2b7","./js/transcript.js":"./js/transcript.js?v=b57d1db2b7","./js/whisper-worker.js":"./js/whisper-worker.js?v=b57d1db2b7","./vendor/anthropic-sdk.mjs":"./vendor/anthropic-sdk.mjs?v=b57d1db2b7"}}</script>
+  <link rel="stylesheet" href="css/app.css?v=b57d1db2b7">
+  <script type="module" src="js/app.js?v=b57d1db2b7"></script>
+  <!-- stamp:end -->
 </head>
 <body>
   <header class="topbar">
@@ -63,6 +67,9 @@
             <option value="en" data-t="lang_en">English</option>
           </select>
           <span id="audio-info" class="muted small"></span>
+          <span id="bridge-state" class="bridge-state small hidden"></span>
+          <span class="spacer"></span>
+          <button id="ask-claude" class="ask" data-t="btn_ask_claude"></button>
         </div>
         <p id="notice" class="notice hidden"></p>
         <div class="section-head"><span data-t="sec_topic"></span><span class="spacer"></span><span id="countdown" class="muted small"></span><button id="refresh" class="icon" data-t="btn_refresh">↻</button></div>
@@ -84,8 +91,10 @@
         <div class="row">
           <button id="dl-summary" data-t="download_summary"></button>
           <button id="dl-transcript" data-t="download_transcript"></button>
+          <button id="summary-claude" class="ask" data-t="btn_summary_claude"></button>
           <button id="new-call" class="primary" data-t="btn_new_call"></button>
         </div>
+        <p id="summary-claude-status" class="notice hidden"></p>
         <div id="review" class="hidden">
           <h3 data-t="review_title"></h3>
           <p class="hint" data-t="review_text"></p>
@@ -138,6 +147,17 @@
         <div class="row"><button id="key-save" class="primary" data-t="settings_key_save"></button><button id="key-forget" class="ghost" data-t="settings_key_forget"></button><span id="key-status" class="muted small"></span></div>
       </div>
       <div class="card">
+        <h3 data-t="bridge_title"></h3>
+        <p class="hint"><span data-t="bridge_text"></span> <a id="bridge-howto" href="https://github.com/aaddabbo30-bit/transcript#connect-claude-directly-no-api-key" target="_blank" rel="noopener" data-t="bridge_howto"></a></p>
+        <label class="field"><span data-t="bridge_url"></span><input id="bridge-url" type="url" placeholder="https://call-assistant-bridge.…workers.dev"></label>
+        <div class="row"><button id="bridge-connect" class="primary" data-t="bridge_connect"></button><button id="bridge-off" class="ghost" data-t="bridge_off"></button><span id="bridge-status" class="muted small"></span></div>
+        <div id="bridge-connector-box" class="hidden">
+          <label class="field"><span data-t="bridge_connector"></span><input id="bridge-connector" type="text" readonly></label>
+          <p class="hint" data-t="bridge_connector_hint"></p>
+          <div class="row"><button id="bridge-copy" data-t="bridge_copy"></button><button id="bridge-clear" class="ghost" data-t="bridge_clear"></button><button id="bridge-new-key" class="ghost" data-t="bridge_new_key"></button></div>
+        </div>
+      </div>
+      <div class="card">
         <label class="field"><span data-t="settings_whisper"></span>
           <select id="whisper-model"><option value="base">base</option><option value="small">small</option></select>
         </label>
@@ -158,6 +178,8 @@
             <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
           </select>
         </label>
+        <label class="field"><span data-t="settings_claude_url"></span><input id="claude-url" type="url" placeholder="https://claude.ai/new"></label>
+        <p class="hint" data-t="settings_claude_url_hint"></p>
         <label class="field"><span data-t="settings_ui"></span>
           <select id="ui-language"><option value="it">Italiano</option><option value="en">English</option></select>
         </label>
@@ -166,6 +188,5 @@
     </section>
   </main>
 
-  <script type="module" src="js/app.js"></script>
 </body>
 </html>

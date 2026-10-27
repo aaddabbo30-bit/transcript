@@ -10,6 +10,9 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { currentStamp } from "../tools/stamp.mjs";
+import worker from "../../bridge/src/worker.js";
+import { memoryD1 } from "../../bridge/test/d1.mjs";
 
 // CommonJS require also finds a globally installed Playwright (NODE_PATH).
 const { chromium } = createRequire(import.meta.url)("playwright");
@@ -19,12 +22,15 @@ const FAKE_MIC = process.argv[2] || fileURLToPath(new URL("../../tests/fixtures/
 const SHOTS = process.argv[3] || null;
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".txt": "text/plain" };
 
+const served = []; // every URL the page asked our server for
+
 function serve() {
   const server = createServer(async (req, res) => {
+    served.push(req.url);
     const path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^([/\\])+/, "") || "index.html";
     try {
       const body = await readFile(join(ROOT, path));
-      res.writeHead(200, { "content-type": TYPES[extname(path)] || "application/octet-stream" });
+      res.writeHead(200, { "content-type": TYPES[extname(path)] || "application/octet-stream", "cache-control": "no-store" });
       res.end(body);
     } catch {
       res.writeHead(404);
@@ -93,7 +99,13 @@ const errors = [];
 let failed = false;
 
 async function newPage(query, { apiKey = "sk-ant-e2e-test" } = {}) {
-  const context = await browser.newContext({ viewport: { width: 900, height: 1000 }, locale: "it-IT" });
+  const context = await browser.newContext({
+    viewport: { width: 900, height: 1000 },
+    locale: "it-IT",
+    permissions: ["clipboard-read", "clipboard-write"],
+  });
+  // «Ask Claude» opens claude.ai: answer with a stand-in page.
+  await context.route("https://claude.ai/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Claude</title>" }));
   await context.addInitScript((key) => {
     if (key) localStorage.setItem("ca.apiKey", key);
     localStorage.setItem("ca.settings.v1", JSON.stringify({ uiLanguage: "it", insightInterval: 10 }));
@@ -150,8 +162,13 @@ await step("demo call through the real Claude SDK (mocked network): live insight
   await page.context().close();
 });
 
-await step("live microphone (Chromium fake device) -> segmenter -> scripted Whisper -> transcript", async () => {
-  const page = await newPage("?engine=scripted&llm=fake", { apiKey: "" });
+async function clipboard(page) {
+  await page.bringToFront();
+  return page.evaluate(() => navigator.clipboard.readText());
+}
+
+await step("live microphone without an API key -> scripted Whisper -> transcript -> «Ask Claude» in the Claude chat", async () => {
+  const page = await newPage("?engine=scripted", { apiKey: "" });
   await page.uncheck("#src-shared");
   await page.click("#start");
   await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length >= 2, null, { timeout: 30000 });
@@ -159,9 +176,127 @@ await step("live microphone (Chromium fake device) -> segmenter -> scripted Whis
   assert.match(first, /Io: frase di prova 1/);
   assert.match(await page.textContent("#audio-info"), /mic/i);
   assert.match(await page.textContent("#status"), /ascolto/i);
+  assert.match(await page.textContent("#topic"), /Chiedi a Claude/);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-mic.png") });
+
+  // First request: copied, and Claude opens in a new tab.
+  const [claude] = await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
+  assert.equal(claude.url(), "https://claude.ai/new");
+  await page.waitForSelector("#notice.ok");
+  const ask = await clipboard(page);
+  assert.match(ask, /^Sono in una chiamata adesso\./);
+  assert.match(ask, /Trascrizione:\n\[\d\d:\d\d\] Io: frase di prova 1/);
+  // Later requests only copy: the Claude tab is already open.
+  let popups = 0;
+  page.on("popup", () => popups++);
+  await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length >= 3, null, { timeout: 30000 });
+  await page.click("#ask-claude");
+  await page.waitForFunction(() => /frase di prova 3/.test(document.querySelector("#transcript").textContent));
+  assert.match(await clipboard(page), /Io: frase di prova 3/);
+  assert.equal(popups, 0);
+
   await page.click("#stop");
   await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
+  assert.match(await page.textContent("#summary-error"), /Riassunto con Claude/);
+  const [again] = await Promise.all([page.waitForEvent("popup"), page.click("#summary-claude")]);
+  assert.equal(again.url(), "https://claude.ai/new");
+  const summary = await clipboard(page);
+  assert.match(summary, /^Ho appena finito una chiamata \(/);
+  assert.match(summary, /Io: frase di prova 1/);
+  await page.context().close();
+});
+
+await step("always-on-top window: the live panel keeps updating there, and Stop works from it", async () => {
+  const page = await newPage("?speed=25&llm=fake");
+  await page.click("#demo");
+  await page.waitForSelector("#transcript .line");
+  const [pip] = await Promise.all([page.context().waitForEvent("page"), page.click("#pip")]);
+  await pip.waitForSelector("#live #transcript");
+  const before = await pip.evaluate(() => document.querySelectorAll("#transcript .line").length);
+  await pip.waitForFunction((n) => document.querySelectorAll("#transcript .line").length > n + 5, before, { timeout: 15000 });
+  await pip.waitForFunction(() => document.getElementById("timer").textContent !== "00:00", null, { timeout: 5000 });
+  await pip.click("#stop");
+  await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
+  assert.ok(await page.evaluate(() => Boolean(document.getElementById("live"))), "the panel is back in the page");
+  await page.context().close();
+});
+
+// The user's bridge (bridge/src/worker.js), run here on Node's SQLite: the page
+// reaches it at https://bridge.test, Claude's side is a direct MCP request.
+const bridgeEnv = { DB: memoryD1() };
+
+async function routeBridge(context) {
+  await context.route("https://bridge.test/**", async (route) => {
+    const req = route.request();
+    const res = await worker.fetch(
+      new Request(req.url(), {
+        method: req.method(),
+        headers: { "content-type": (await req.headerValue("content-type")) || "text/plain" },
+        body: ["GET", "HEAD"].includes(req.method()) ? undefined : req.postDataBuffer(),
+      }),
+      bridgeEnv,
+    );
+    await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
+  });
+  await context.route("https://down.test/**", (route) => route.abort("connectionrefused"));
+}
+
+async function readBridge(connector, name, args = {}) {
+  const res = await worker.fetch(
+    new Request(connector, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }),
+    bridgeEnv,
+  );
+  return (await res.json()).result.content[0].text;
+}
+
+async function untilBridge(connector, pattern, tries = 60) {
+  let text = "";
+  for (let i = 0; i < tries && !pattern.test(text); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    text = await readBridge(connector, "get_current_call");
+  }
+  assert.match(text, pattern);
+  return text;
+}
+
+await step("Claude connector: the page sends the call to the bridge, Claude reads it over MCP", async () => {
+  const page = await newPage("?engine=scripted", { apiKey: "" });
+  await routeBridge(page.context());
+  await page.click('[data-tab="settings"]');
+  await page.fill("#bridge-url", "https://down.test");
+  await page.click("#bridge-connect");
+  await page.waitForFunction(() => /Non riesco a raggiungere il ponte/.test(document.querySelector("#bridge-status").textContent));
+  assert.ok(await page.isHidden("#bridge-connector-box"));
+  await page.fill("#bridge-url", "bridge.test/");
+  await page.click("#bridge-connect");
+  await page.waitForFunction(() => /^Collegato/.test(document.querySelector("#bridge-status").textContent));
+  const connector = await page.inputValue("#bridge-connector");
+  assert.match(connector, /^https:\/\/bridge\.test\/mcp\/[A-Za-z0-9_-]{32}$/);
+  await page.click("#bridge-copy");
+  assert.equal(await clipboard(page), connector);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-connector.png"), fullPage: true });
+
+  await page.click('[data-tab="call"]');
+  await page.uncheck("#src-shared");
+  await page.click("#start");
+  await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length >= 2, null, { timeout: 30000 });
+  assert.match(await page.textContent("#topic"), /legge questa chiamata dal ponte/);
+  // Claude's side: the transcript arrives within a few seconds.
+  const live = await untilBridge(connector, /Me: frase di prova 2/);
+  assert.match(live, /Status: in progress/);
+  await page.waitForSelector("#bridge-state.ok");
+  // «Ask Claude» now copies only the request: Claude reads the call itself.
+  await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
+  assert.match(await clipboard(page), /^Usa il connector della mia pagina Assistente chiamate \(strumento get_current_call\)/);
+
+  await page.click("#stop");
+  await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
+  assert.match(await page.textContent("#summary-error"), /legge la chiamata dal ponte/);
+  await untilBridge(connector, /Status: ended/);
+  await page.click('[data-tab="settings"]');
+  await page.click("#bridge-clear");
+  await page.waitForFunction(() => /^Fatto/.test(document.querySelector("#bridge-status").textContent));
+  assert.match(await readBridge(connector, "list_calls"), /^No calls yet/);
   await page.context().close();
 });
 
@@ -202,10 +337,49 @@ await step("memory import of the Claude export and settings", async () => {
   await page.fill("#api-key", "not-a-key");
   await page.click("#key-save");
   assert.match(await page.textContent("#key-status"), /sk-ant-/);
+  await page.fill("#claude-url", "https://example.com/chat");
+  await page.click("#settings-save");
+  assert.match(await page.textContent("#settings-status"), /claude\.ai/);
+  await page.fill("#claude-url", "https://claude.ai/project/0123");
   await page.selectOption("#ui-language", "en");
   await page.click("#settings-save");
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("ca.settings.v1"))).claudeUrl, "https://claude.ai/project/0123");
   assert.equal(await page.textContent('[data-tab="memory"]'), "Memory");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-settings.png") });
+  await page.context().close();
+});
+
+await step("every script and the Whisper worker load with the version stamp of index.html", async () => {
+  const { version } = currentStamp();
+  served.length = 0;
+  const page = await newPage("?llm=fake");
+  // A stand-in for Transformers.js, so the worker stops right after its own imports.
+  await page.context().route("https://cdn.jsdelivr.net/npm/@huggingface/transformers@*", (route) =>
+    route.fulfill({
+      headers: { "content-type": "text/javascript", "access-control-allow-origin": "*" },
+      body: "export const env = {}; export async function pipeline() { throw new Error('stub transformers'); }",
+    }),
+  );
+  await page.waitForFunction(() => window.__callAssistant);
+  const loaded = await page.evaluate(async () => {
+    const { WhisperTranscriber } = await import("./js/transcriber.js");
+    const whisper = new WhisperTranscriber();
+    try {
+      return await whisper.load();
+    } catch (err) {
+      return err.message;
+    } finally {
+      whisper.dispose();
+    }
+  });
+  assert.match(loaded, /stub transformers/);
+  const scripts = served.filter((url) => /\.(m?js|css)(\?|$)/.test(url));
+  assert.ok(scripts.includes(`/js/app.js?v=${version}`), scripts.join(" "));
+  assert.ok(scripts.includes(`/js/whisper-worker.js?v=${version}`), scripts.join(" "));
+  assert.ok(scripts.includes(`/vendor/anthropic-sdk.mjs?v=${version}`), scripts.join(" "));
+  // The worker's own import too: workers don't see the page's import map.
+  assert.equal(scripts.filter((url) => url.startsWith("/js/model-files.js")).length, 2, scripts.join(" "));
+  for (const url of scripts) assert.ok(url.endsWith(`?v=${version}`), `${url} has no ?v=${version}`);
   await page.context().close();
 });
 

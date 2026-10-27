@@ -1,0 +1,26 @@
+{
+  "name": "call-assistant-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bridge between the Call Assistant web app and Claude: keeps the live transcript and serves it as an MCP connector.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  },
+  "cloudflare": {
+    "label": "Call Assistant bridge",
+    "products": ["Workers", "D1"],
+    "categories": ["ai"],
+    "bindings": {
+      "DB": {
+        "description": "Keeps the transcript of your recent calls (48 hours at most, the last 10) for Claude to read."
+      }
+    }
+  }
+}

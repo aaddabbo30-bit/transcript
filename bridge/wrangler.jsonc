@@ -1,0 +1,10 @@
+// Cloudflare Worker for the Call Assistant bridge (see ../README.md, "Connect Claude directly").
+// The D1 database is created on the first deploy when it doesn't exist yet.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "call-assistant-bridge",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "d1_databases": [{ "binding": "DB", "database_name": "call-assistant-bridge" }]
+}

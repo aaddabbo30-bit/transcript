@@ -43,7 +43,8 @@ main { max-width: 760px; margin: 0 auto; padding: 16px; }
 .field.grow { flex: 1; margin: 0; }
 .check { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
 .hint { color: var(--muted); font-size: 13px; margin: 6px 0; }
-select, input[type=password], input[type=number], textarea {
+.hint a { color: var(--accent); }
+select, input[type=password], input[type=number], input[type=url], input[type=text], textarea {
   background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; width: 100%;
 }
 textarea { resize: vertical; font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 13px; }
@@ -54,6 +55,8 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 button.ghost { background: transparent; color: var(--muted); }
 button.big { font-size: 17px; padding: 10px 22px; }
 button.icon { background: transparent; border: 0; color: var(--muted); padding: 0 4px; }
+button.ask { border-color: var(--accent); color: var(--accent); }
+.panel-sub button.ask { padding: 3px 10px; font-size: 13px; }
 button:disabled { opacity: .5; cursor: default; }
 .notice { margin: 8px 0; font-size: 13px; color: var(--muted); }
 .notice.warn { color: var(--warn); }
@@ -109,3 +112,7 @@ body.pip .transcript { max-height: 30vh; }
 .manual-model { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
 .manual-model ol { margin: 6px 0; padding-left: 20px; }
 .manual-model a { color: var(--accent); }
+
+.bridge-state.ok { color: var(--ok); }
+.bridge-state.error { color: var(--danger); }
+#bridge-connector { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }

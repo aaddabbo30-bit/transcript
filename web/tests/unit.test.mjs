@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey } from "../js/bridge.js";
 import { ClaudeClient, CostTracker, FakeClaude, LLMError, estimateCost } from "../js/claude.js";
 import { Memory, MemoryPathError } from "../js/memory.js";
-import { INSIGHT_SCHEMA } from "../js/prompts.js";
+import { INSIGHT_SCHEMA, chatAskPrompt, chatSummaryPrompt, chatTranscript } from "../js/prompts.js";
 import { AudioRouter, Segmenter, TARGET_RATE, resample } from "../js/segmenter.js";
 import { CallSession, TranscriptReplay } from "../js/session.js";
 import { ScriptedTranscriber } from "../js/transcriber.js";
@@ -302,4 +303,79 @@ test("audio session: segmenter + (scripted) Whisper, and fatal API errors stop l
   assert.ok(result.error); // summary failed too (same broken key), but the transcript is kept
   assert.ok(result.transcript.length >= 3);
   assert.ok(events.some(([k, p]) => k === "warning" && Array.isArray(p) && p[0] === "insight_error"));
+});
+
+test("Claude chat requests: labels, notes, and only the end of a long call", () => {
+  const lines = Array.from({ length: 400 }, (_, i) => ({ t: i * 5, speaker: i % 2 ? "them" : "me", text: `frase numero ${i}` }));
+  const ask = chatAskPrompt({ lang: "it", lines, notes: "<file path=\"me.md\">\nMi chiamo Andrea\n</file>" });
+  assert.match(ask, /^Sono in una chiamata adesso\./);
+  assert.match(ask, /Le mie note personali:\n<file path="me\.md">/);
+  assert.match(ask, /\[33:15\] Altri: frase numero 399$/);
+  assert.match(ask, /\(inizio della chiamata omesso\)\n\[\d\d:\d\d\] (Io|Altri): /);
+  assert.ok(!ask.includes("frase numero 0\n"));
+  assert.ok(ask.length < 13500);
+  assert.equal(chatTranscript(lines.slice(0, 2), "en"), "[00:00] Me: frase numero 0\n[00:05] Them: frase numero 1");
+
+  const summary = chatSummaryPrompt({ lang: "en", meta: "today, 33:15", lines, liveRemember: ["Party on Saturday"] });
+  assert.match(summary, /^I just finished a call \(today, 33:15\)\./);
+  assert.match(summary, /Notes taken during the call:\n- Party on Saturday/);
+  assert.ok(summary.includes("[00:00] Me: frase numero 0") && !summary.includes("My personal notes"));
+});
+
+test("bridge addresses and secret key", () => {
+  assert.equal(cleanBridgeUrl(""), "");
+  assert.equal(cleanBridgeUrl(" call-assistant-bridge.me.workers.dev/ "), "https://call-assistant-bridge.me.workers.dev");
+  assert.equal(cleanBridgeUrl("https://b.me.workers.dev/mcp/abcdefghijklmnopqrstuvwxyz012345"), "https://b.me.workers.dev");
+  assert.equal(cleanBridgeUrl("http://localhost:8787/"), "http://localhost:8787");
+  assert.equal(cleanBridgeUrl("http://example.com"), null);
+  assert.equal(cleanBridgeUrl("ftp://example.com"), null);
+  const key = newBridgeKey();
+  assert.match(key, /^[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(key, newBridgeKey());
+  assert.equal(new Bridge({ url: "https://b.dev", key }).connectorUrl, `https://b.dev/mcp/${key}`);
+});
+
+test("bridge requests: simple text/plain POSTs, readable errors", async () => {
+  const sent = [];
+  const reply = (status, body) => async (url, init) => {
+    sent.push({ url, init });
+    if (status === 0) throw new TypeError("Failed to fetch");
+    return new Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+  };
+  const bridge = (fetchImpl) => new Bridge({ url: "https://b.dev", key: "K".repeat(32), fetchImpl });
+  assert.deepEqual(await bridge(reply(200, { ok: true, calls: 2 })).status(), { ok: true, calls: 2 });
+  assert.equal(sent[0].url, `https://b.dev/api/${"K".repeat(32)}/status`);
+  await bridge(reply(200, { ok: true })).send({ id: "x", lines: [] });
+  assert.equal(sent[1].init.headers["content-type"], "text/plain;charset=UTF-8");
+  assert.equal(JSON.parse(sent[1].init.body).id, "x");
+  const code = async (fetchImpl) => (await bridge(fetchImpl).status().catch((e) => e)).code;
+  assert.equal(await code(reply(0)), "unreachable");
+  assert.equal(await code(reply(404, "<html>Not found</html>")), "not_found");
+  assert.equal(await code(reply(500, { ok: false, error: "no_database" })), "no_database");
+  assert.equal(await code(reply(500, { ok: false, error: "server_error" })), "failed");
+  assert.ok((await bridge(reply(0)).clear().catch((e) => e)) instanceof BridgeError);
+});
+
+test("bridge sync sends the call when it changes, reports trouble, marks the end", async () => {
+  const store = new TranscriptStore();
+  const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store, lastInsight: null };
+  const calls = [];
+  let down = false;
+  const bridge = { send: async (call) => { if (down) throw new BridgeError("unreachable"); calls.push(call); } };
+  const states = [];
+  const sync = new BridgeSync({ bridge, session, intervalMs: 60000, onState: (s) => states.push(s) });
+  await sync.tick();
+  await sync.tick(); // nothing new: nothing sent
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { id: "2026-10-27T09:00:00.000Z", startedAt: "2026-10-27T09:00:00.000Z", status: "live", lang: "it", lines: [], remember: [], summary: "" });
+  store.add({ t: 3, speaker: "me", text: "Ciao Giulia" });
+  down = true;
+  await sync.tick();
+  down = false;
+  await sync.tick(); // the failed update is sent again
+  assert.deepEqual(calls[1].lines, [{ t: 3, speaker: "me", text: "Ciao Giulia" }]);
+  assert.deepEqual(states, ["ok", "error", "ok"]);
+  await sync.finish("Riassunto.");
+  assert.equal(calls[2].status, "ended");
+  assert.equal(calls[2].summary, "Riassunto.");
 });

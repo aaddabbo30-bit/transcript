@@ -44,7 +44,7 @@ To publish it, do this once:
 
 1. Open the link in **Chrome or Edge on a computer**. Safari, Firefox and phones can't share call audio.
 2. **Impostazioni / Settings**:
-   - paste your Anthropic API key. It is saved only in this browser. Tip: create a dedicated key with a spending limit;
+   - **API key (optional)**: with an Anthropic API key, suggestions refresh by themselves every ~25 seconds and the summary is written automatically. The key is saved only in this browser. Tip: create a dedicated key with a spending limit. Without a key, use **Ask Claude** (see below);
    - choose the transcription model: `base` is quick; `small` is more accurate but needs a good graphics card.
 3. **Memoria / Memory**: write a few lines about yourself, or use *Import Claude memory*. It works as in the desktop app.
 4. **Chiamata / Call**: choose the language and what to listen to, then press **Avvia / Start**. Chrome asks what to share:
@@ -63,9 +63,83 @@ To publish it, do this once:
    - download it as Markdown if you like;
    - approve the memory proposals.
 
+**Without an API key: Ask Claude**
+
+The page can hand the call to a chat on claude.ai instead. The chat runs on your Claude plan, and Claude already knows you from your Claude memory.
+- During the call, press **Chiedi a Claude ↗ / Ask Claude ↗**:
+  - the page copies the transcript (its last ~12,000 characters) with a ready-made request: what is being discussed, up to 3 things to say now, things to remember;
+  - the first time, it also opens claude.ai in a new tab. Paste (Ctrl+V) and send;
+  - press it again whenever you want new suggestions, and paste in the same chat.
+- After **Stop**, press **Riassunto con Claude ↗ / Summary with Claude ↗**. The page copies the whole transcript with a request for the summary, and opens a new chat.
+- In **Settings → Claude chat to open** you can put the link of one of your claude.ai Projects, so every call ends up there.
+
+Why not run the whole thing inside Claude, as an artifact? Artifacts on claude.ai can't use the microphone or capture the audio of a tab. So the page does the listening and transcription, and the Claude chat does the thinking.
+
+### Connect Claude directly (no API key)
+
+With a small «bridge» of your own, Claude reads the call by itself. During the call you ask in the Claude chat «what should I say now?», with nothing to copy and no API key. The chat runs on your Claude plan, and Claude knows you from your Claude memory.
+
+How it works:
+- The page sends the transcript to your bridge every few seconds. The bridge is a free Cloudflare Worker (the [`bridge/`](bridge/) folder).
+- Claude reads it from there as a **custom connector** on claude.ai (MCP).
+
+You need:
+- **A Claude plan that allows custom connectors.**
+  - On a personal **Pro** or **Max** plan you add it yourself.
+  - The **Free** plan allows one custom connector, in beta.
+  - On **Team** or **Enterprise**, only an Owner can add it.
+- **Accounts:** a free **Cloudflare** account and your **GitHub** account.
+
+You can do steps 1–3 from any computer, for example at home.
+
+1. **Create the bridge** (once, about 5 minutes).
+   1. Click this button:
+
+      [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/aaddabbo30-bit/transcript/tree/main/bridge)
+
+   2. Sign in to Cloudflare, or create a free account.
+   3. Connect GitHub when asked, then press **Create and deploy**. Cloudflare copies the `bridge` folder into a new repository of yours and publishes it, together with its database.
+   4. At the end, copy the Worker's address. It looks like `https://call-assistant-bridge.<your-name>.workers.dev`.
+   5. Open that address in the browser. It should say *Call Assistant bridge: running*.
+2. **Connect the page.**
+   1. Go to **Settings → Connect Claude directly**, paste the address and press **Connect and test**.
+   2. The page shows the **connector address**. Copy it.
+3. **Add the connector in Claude.**
+   1. On claude.ai, go to **Settings → Connectors → Add custom connector**.
+   2. Name: *Call Assistant*. URL: the connector address.
+   3. No login is needed.
+4. **Use it.**
+   1. Open a chat and check that the connector is on, in the tools menu under the message box.
+   2. Start the call in the page. The live panel shows *Claude connected*.
+   3. Ask Claude, for example:
+      - «Cosa dico adesso?» or «What did they just ask me?»: Claude reads the latest minutes of the transcript;
+      - after **Stop**, «Riassumi la chiamata»: Claude reads the whole call.
+
+   **Ask Claude** now copies only a short request that tells Claude to use the connector.
+
+   Tip: create a claude.ai Project for your calls, with the instruction «When I ask about my call, read it with get_current_call». Put the Project's link in **Settings → Claude chat to open**.
+
+**Without GitHub (manual setup)**
+
+In the Cloudflare dashboard:
+1. **Storage & databases → D1**: create a database named `call-assistant-bridge`.
+2. **Workers & Pages → Create**: start from *Hello World*, name it `call-assistant-bridge` and deploy it.
+3. **Edit code**: replace everything with the content of [`bridge/src/worker.js`](bridge/src/worker.js), then deploy.
+4. In the Worker's **Settings → Bindings**, add a **D1 database** binding:
+   - variable name `DB`;
+   - database `call-assistant-bridge`.
+
+**Privacy and limits**
+- **Where the transcript goes:** it leaves your computer, goes to your own bridge on Cloudflare, and Claude reads it from there. The audio never leaves the computer.
+- **How long it stays:** the bridge keeps calls for 48 hours at most, and only the last 10. **Delete the calls from the bridge** removes them at once.
+- **The connector address is a secret:** it contains a key, and whoever has the address can read your calls. Keep it private. **Change secret address** makes a new one; then update it in Claude too.
+- **Company networks:** on some, the page can't reach `workers.dev`. The live panel then shows *Bridge to Claude unreachable*.
+- **Claude answers only when you ask:** it doesn't refresh by itself every 25 seconds, as it does with an API key.
+- **Cloudflare's free limits:** they are far above what one person's calls use. The page sends at most one update every 6 seconds, and only when the transcript changed.
+
 **What stays where**
 - **Audio**: transcribed inside the browser with Whisper (Transformers.js). It never leaves your computer.
-- **Text sent to Claude**: only the transcript text and your memory.
+- **Text sent to Claude**: only the transcript text and your memory. With *Ask Claude*, the page sends nothing: you paste the text into claude.ai yourself.
 - **API key, memory and call history**: stored in that browser's local storage.
 - **Backup**: use *Memory → Export memory* to keep a copy or move it to another computer. On another computer, use *Import backup*; plain `.md` files from the desktop app's memory folder work too.
 
@@ -326,13 +400,30 @@ The web app needs no build step: plain ES modules, served as static files.
 - `js/whisper-worker.js`: Whisper in a Web Worker with [Transformers.js](https://github.com/huggingface/transformers.js), WebGPU with a WASM fallback, loaded from jsDelivr.
 - `js/claude.js`: the official Anthropic SDK, bundled in `vendor/`, with `dangerouslyAllowBrowser`.
 - `js/session.js`: the call lifecycle.
+- `js/prompts.js`: also the requests that *Ask Claude* copies for a claude.ai chat.
+- `js/bridge.js`: sends the running call to the user's bridge.
 - `js/memory.js` and `js/history.js`: local storage.
+
+After changing anything in `js/`, `vendor/` or `css/`, run `node web/tools/stamp.mjs`. It writes a hash of those files into `index.html` (`?v=…` links plus an import map), so browsers fetch a new version as a whole instead of mixing new and cached files. CI fails when the stamp is out of date.
 
 Run it locally with any static server, for example `python -m http.server -d web`, then open <http://localhost:8000>; `localhost` counts as secure for the microphone.
 
 Tests:
-- `node --test web/tests/unit.test.mjs` runs 16 unit tests, including the real SDK against a mocked `fetch` and full simulated calls.
-- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It needs `playwright`.
+- `node --test web/tests/unit.test.mjs` runs 20 unit tests, including the real SDK against a mocked `fetch` and full simulated calls.
+- `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording and the Claude API mocked at the network level. It also covers *Ask Claude* without an API key, the bridge to Claude (the page sends the call, an MCP request reads it back), the always-on-top window, and checks that every script, including the Whisper worker, loads with the current stamp. It needs `playwright`.
+
+### Claude bridge (`bridge/`)
+
+A Cloudflare Worker with no dependencies, [`bridge/src/worker.js`](bridge/src/worker.js). It has two sides:
+- **For the page:** `POST /api/<key>/call` saves the current call, `GET /api/<key>/status` checks the bridge, and `POST /api/<key>/delete` clears the calls.
+- **For Claude:** `POST /mcp/<key>` is an MCP server over Streamable HTTP, with JSON responses and no login. It offers three read-only tools: `get_current_call`, `list_calls` and `get_call`.
+
+Storage is D1, bound as `DB`. The table is created on the first request; the database is created by the first deploy. `<key>` is a random 32-character secret made by the page; the database stores only its SHA-256.
+
+Tests:
+- `node --test bridge/test/*.test.mjs` runs the Worker against Node's built-in SQLite.
+- `node bridge/test/mcp-client.mjs [url]` connects with the official MCP TypeScript SDK client. Without a URL it runs the Worker in-process; with one it uses a running bridge, such as `npx wrangler dev`.
+- CI runs all of these, including `wrangler dev` with a local D1 database and a deploy dry run.
 
 ### Run from source
 

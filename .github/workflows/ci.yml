@@ -117,6 +117,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: index.html is stamped for the current scripts
+        run: node web/tools/stamp.mjs --check
       - name: Unit tests
         run: node --test web/tests/unit.test.mjs
       - name: Browser end-to-end test (fake microphone, mocked Claude API)
@@ -124,3 +126,28 @@ jobs:
           npm install --no-save playwright@1.63.0
           npx playwright install --with-deps chromium
           node web/tests/e2e.mjs
+
+  bridge:
+    name: Claude bridge (Worker + MCP)
+    runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Unit tests (the Worker on Node's SQLite)
+        run: node --test bridge/test/*.test.mjs
+      - name: Official MCP client against the Worker
+        run: |
+          npm install --no-save --no-audit --no-fund @modelcontextprotocol/sdk@1.32.1
+          node bridge/test/mcp-client.mjs
+      - name: Real Workers runtime (wrangler dev, local D1) and deploy bundle
+        working-directory: bridge
+        run: |
+          npm install --no-audit --no-fund
+          npx wrangler dev --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
+          for i in $(seq 1 90); do curl -sf http://127.0.0.1:8787/ > /dev/null && break; sleep 1; done
+          node test/mcp-client.mjs http://127.0.0.1:8787 || { tail -40 wrangler.log; exit 1; }
+          npx wrangler deploy --dry-run --outdir dist
