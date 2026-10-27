@@ -85,8 +85,8 @@ export class Segmenter {
       rate: TARGET_RATE,
       frameMs: 30,
       startMs: 90,
-      silenceEndMs: 700,
-      maxChunkS: 12,
+      silenceEndMs: 500, // a pause this long ends a sentence: shorter means text sooner
+      maxChunkS: 8, // continuous speech is cut at a quiet point by then
       preRollMs: 300,
       minVoicedMs: 250,
       absThreshold: 0.004,

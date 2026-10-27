@@ -50,13 +50,13 @@ const saved = await fetch(`${bridge.base}/api/${key}/call`, {
     ],
   }),
 });
-assert.deepEqual(await saved.json(), { ok: true });
+assert.deepEqual(await saved.json(), { ok: true, suggestions: null });
 
 const client = new Client({ name: "bridge-test", version: "1.0.0" });
 await client.connect(new StreamableHTTPClientTransport(new URL(`${bridge.base}/mcp/${key}`)));
 assert.equal(client.getServerVersion().name, "call-assistant-bridge");
 const { tools } = await client.listTools();
-assert.deepEqual(tools.map((t) => t.name), ["get_current_call", "list_calls", "get_call"]);
+assert.deepEqual(tools.map((t) => t.name), ["get_current_call", "show_suggestions", "list_calls", "get_call"]);
 const current = await client.callTool({ name: "get_current_call", arguments: { minutes: 5 } });
 const text = current.content[0].text;
 assert.match(text, /Status: in progress/);
@@ -64,11 +64,13 @@ assert.match(text, /\[00:02\] Them: Ciao, hai visto la mia offerta di lavoro a M
 const list = await client.callTool({ name: "list_calls", arguments: {} });
 assert.match(list.content[0].text, new RegExp(`id ${id.replace(/[.]/g, "\\.")}: .*2 lines`));
 const { prompts } = await client.listPrompts();
-assert.deepEqual(prompts.map((p) => p.title), ["Cosa dico adesso?", "Cosa mi hanno chiesto?", "Riassumi la chiamata"]);
+assert.deepEqual(prompts.map((p) => p.title), ["Segui la chiamata", "Cosa dico adesso?", "Cosa mi hanno chiesto?", "Riassumi la chiamata"]);
 const prompt = await client.getPrompt({ name: "cosa_dico_adesso", arguments: {} });
 assert.match(prompt.messages[0].content.text, /^Sono in una chiamata adesso\.[\s\S]*Me: Sì, quando dovresti iniziare\?\n<\/call>$/);
+const shown = await client.callTool({ name: "show_suggestions", arguments: { topic: "Il lavoro a Milano", suggestions: [{ kind: "question", text: "Quando inizi?" }] } });
+assert.match(shown.content[0].text, /^Shown in the Call Assistant window/);
 await client.close();
 
 await fetch(`${bridge.base}/api/${key}/delete`, { method: "POST" });
 bridge.close();
-console.log(`ok - official MCP client: handshake, tools/list, tools/call, prompts/list, prompts/get against ${process.argv[2] || "the Worker code in-process"}`);
+console.log(`ok - official MCP client: handshake, tools/list, tools/call (read and show_suggestions), prompts/list, prompts/get against ${process.argv[2] || "the Worker code in-process"}`);

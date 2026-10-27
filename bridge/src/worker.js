@@ -4,6 +4,7 @@
 //
 //   POST /api/<key>/call     the page saves the current call (JSON sent as text/plain)
 //   GET  /api/<key>/status   the page checks the bridge
+//   GET  /api/<key>/suggestions  what Claude last asked to show in the page (show_suggestions)
 //   POST /api/<key>/delete   the page deletes every call kept for this key
 //   POST /mcp/<key>          MCP: Claude reads the calls (tools, and ready-made prompts)
 //   GET  /health             "running"
@@ -20,6 +21,8 @@ const KEEP_CALLS = 10;
 const STALE_S = 120;
 const MAX_BODY = 2_000_000;
 const MAX_LINES = 20000;
+const MAX_WAIT_S = 25; // get_current_call's wait_seconds, under the clients' request timeouts
+const WAIT_POLL_MS = 1500;
 const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "call-assistant-bridge", title: "Call Assistant", version: "1.0.0" };
 const CORS = {
@@ -49,9 +52,56 @@ const TOOLS = [
           type: "number",
           description: "How many of the last minutes of transcript to return. Default 10; 0 returns the whole call.",
         },
+        since_line: {
+          type: "integer",
+          description:
+            "Return only the lines after this many (the \"Lines so far\" number of your previous read), with two before for context. Use it to follow the call.",
+        },
+        wait_seconds: {
+          type: "number",
+          description: "With since_line: wait up to this many seconds (at most 25) for new lines before answering.",
+        },
       },
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
+    name: "show_suggestions",
+    title: "Show suggestions in the Call Assistant",
+    description:
+      "Show suggestions in the user's Call Assistant window, next to the live transcript, so they can glance at them while they talk " +
+      "instead of reading the chat. Replaces what was shown before. Use it whenever you suggest what to say during a call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "What is being discussed right now, in one short line." },
+        suggestions: {
+          type: "array",
+          maxItems: 4,
+          description: "Up to 3 things the user could say now, ready to say out loud, in the language of the call.",
+          items: {
+            type: "object",
+            properties: {
+              kind: {
+                type: "string",
+                enum: ["question", "answer", "comment"],
+                description: "question: a good question to ask; answer: a reply to what they just asked; comment: a useful remark.",
+              },
+              text: { type: "string" },
+            },
+            required: ["kind", "text"],
+          },
+        },
+        remember: {
+          type: "array",
+          maxItems: 8,
+          items: { type: "string" },
+          description: "Worth remembering from the call so far: names, dates, numbers, commitments.",
+        },
+      },
+      required: ["suggestions"],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "list_calls",
@@ -79,8 +129,24 @@ const TOOLS = [
 ];
 
 // Ready-made requests the user picks in claude.ai. They carry the transcript
-// themselves, so Claude answers at once, with no tool call to approve.
+// themselves, so Claude can answer at once.
 const PROMPTS = [
+  {
+    name: "segui_la_chiamata",
+    title: "Segui la chiamata",
+    description:
+      "Claude segue la chiamata e aggiorna da solo i suggerimenti nella finestra dell'Assistente, fino alla fine. (Follow the call live)",
+    minutes: 5,
+    request:
+      "Seguimi durante questa chiamata, fino alla fine, e aiutami in diretta. Usa anche quello che sai di me.\n" +
+      "Ripeti questo giro:\n" +
+      "1. Chiama get_current_call con since_line = il numero «Lines so far» dell'ultima lettura e wait_seconds = 25: risponde appena arrivano righe nuove.\n" +
+      "2. Se dalle righe nuove viene fuori qualcosa di utile, chiama show_suggestions: l'argomento in una riga, fino a 3 cose che potrei dire adesso " +
+      "(domande o risposte, pronte da dire ad alta voce, nella lingua della chiamata) e le cose da ricordare. Se non c'è niente di nuovo, salta questo passo.\n" +
+      "3. Torna al passo 1.\n" +
+      "Durante i giri non scrivere nella chat: guardo la finestra dell'Assistente. Fermati quando la chiamata risulta finita, " +
+      "oppure dopo 30 giri: allora scrivimi una riga per dirmi di chiederti di continuare.",
+  },
   {
     name: "cosa_dico_adesso",
     title: "Cosa dico adesso?",
@@ -92,6 +158,7 @@ const PROMPTS = [
       "1. Di cosa si parla, in una riga.\n" +
       "2. Fino a 3 cose che potrei dire adesso (domande da fare o risposte), pronte da dire ad alta voce, nella lingua della chiamata.\n" +
       "3. Cose da ricordare (nomi, date, numeri, impegni), se ce ne sono.\n" +
+      "Manda le stesse cose anche con show_suggestions, così le vedo nella finestra dell'Assistente accanto alla trascrizione. " +
       "Quando ti richiedo un aggiornamento, rileggi la chiamata con lo strumento get_current_call.",
   },
   {
@@ -101,7 +168,8 @@ const PROMPTS = [
     minutes: 5,
     request:
       "Sono in una chiamata adesso. Dalla trascrizione qui sotto, elenca le domande o le richieste che mi hanno fatto negli ultimi minuti. " +
-      "Per ognuna scrivi una risposta breve che posso dire ad alta voce, nella lingua della chiamata. Usa anche quello che sai di me.",
+      "Per ognuna scrivi una risposta breve che posso dire ad alta voce, nella lingua della chiamata. Usa anche quello che sai di me. " +
+      "Manda le risposte anche con show_suggestions (tipo «answer»), così le vedo nella finestra dell'Assistente.",
   },
   {
     name: "riassunto_chiamata",
@@ -120,24 +188,34 @@ const PROMPTS = [
 
 // ------------------------------------------------------------------ storage
 
-const schemas = new WeakMap(); // database -> promise of its table
+const schemas = new WeakMap(); // database -> promise of its tables
 
 function ready(db) {
   if (schemas.has(db)) return schemas.get(db);
   const schema = db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS calls (
-        room TEXT NOT NULL,
-        id TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        lang TEXT NOT NULL,
-        data TEXT NOT NULL,
-        PRIMARY KEY (room, id)
-      )`,
-    )
-    .run()
+    .batch([
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS calls (
+          room TEXT NOT NULL,
+          id TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          updated_at INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          lang TEXT NOT NULL,
+          data TEXT NOT NULL,
+          PRIMARY KEY (room, id)
+        )`,
+      ),
+      // What Claude last asked to show in the page (show_suggestions), one row per key.
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS suggestions (
+          room TEXT PRIMARY KEY,
+          call_id TEXT,
+          updated_at INTEGER NOT NULL,
+          data TEXT NOT NULL
+        )`,
+      ),
+    ])
     .catch((err) => {
       schemas.delete(db);
       throw err;
@@ -183,6 +261,7 @@ async function saveCall(db, room, call, now) {
       )
       .bind(room, call.id, call.startedAt, now, call.status, call.lang, data),
     db.prepare("DELETE FROM calls WHERE updated_at < ?1").bind(now - KEEP_MS),
+    db.prepare("DELETE FROM suggestions WHERE updated_at < ?1").bind(now - KEEP_MS),
     db
       .prepare(
         `DELETE FROM calls WHERE room = ?1 AND id NOT IN
@@ -205,6 +284,34 @@ async function loadCalls(db, room, now) {
   return results.map(rowToCall);
 }
 
+/** What Claude asked to show, cleaned; null when there is nothing to show. */
+export function cleanSuggestions(args) {
+  const suggestions = (Array.isArray(args.suggestions) ? args.suggestions : [])
+    .filter((s) => s && String(s.text || "").trim())
+    .slice(0, 4)
+    .map((s) => ({ kind: ["question", "answer", "comment"].includes(s.kind) ? s.kind : "comment", text: str(String(s.text).trim(), 400) }));
+  const remember = (Array.isArray(args.remember) ? args.remember : []).map((r) => str(String(r).trim(), 200)).filter(Boolean).slice(0, 8);
+  const topic = str(String(args.topic || "").trim(), 200);
+  return suggestions.length || remember.length || topic ? { topic, suggestions, remember } : null;
+}
+
+async function saveSuggestions(db, room, callId, data, now) {
+  await db
+    .prepare(
+      `INSERT INTO suggestions (room, call_id, updated_at, data) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (room) DO UPDATE SET call_id = excluded.call_id, updated_at = excluded.updated_at, data = excluded.data`,
+    )
+    .bind(room, callId, now, JSON.stringify(data))
+    .run();
+}
+
+async function loadSuggestions(db, room) {
+  const row = await db.prepare("SELECT * FROM suggestions WHERE room = ?1").bind(room).first();
+  return row ? { callId: row.call_id, updatedAt: row.updated_at, ...JSON.parse(row.data) } : null;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // --------------------------------------------------------------- formatting
 
 export function fmtTime(seconds) {
@@ -219,10 +326,14 @@ function lengthOf(call) {
   return call.lines.length ? call.lines[call.lines.length - 1].t : 0;
 }
 
-/** The call as text for Claude: a short header, then "[mm:ss] Me: ..." lines. */
-export function describeCall(call, minutes, now, app = "") {
+/**
+ * The call as text for Claude: a short header, then "[mm:ss] Me: ..." lines:
+ * the last `minutes` (0 = all), or with `since` only the lines after that many.
+ */
+export function describeCall(call, minutes, now, app = "", since = null) {
   const end = lengthOf(call);
-  const shown = minutes > 0 ? call.lines.filter((l) => l.t >= end - minutes * 60) : call.lines;
+  const shown =
+    since !== null ? call.lines.slice(Math.max(0, since - 2)) : minutes > 0 ? call.lines.filter((l) => l.t >= end - minutes * 60) : call.lines;
   const ago = Math.max(0, Math.round((now - call.updatedAt) / 1000));
   const startHint = app ? ` To follow a new call, the user opens the Call Assistant at ${app} and presses Start.` : "";
   const out = [`Call ${call.id}, started ${call.startedAt} (UTC), ${fmtTime(end)} of transcript so far.`];
@@ -231,10 +342,16 @@ export function describeCall(call, minutes, now, app = "") {
     out.push(`Status: in progress. The page last sent an update ${ago} seconds ago.`);
     if (ago > STALE_S) out.push(`The page hasn't sent anything for a while: it may have been closed, or the call may be over.${startHint}`);
   }
-  out.push(`Call language setting: ${call.lang}.`);
+  out.push(`Call language setting: ${call.lang}.`, `Lines so far: ${call.lines.length}.`);
   if (!call.lines.length) out.push("Nothing has been transcribed yet.");
+  else if (since !== null && call.lines.length <= since) out.push(`No new lines after line ${since} yet.`);
   else {
-    const what = minutes > 0 && shown.length < call.lines.length ? `the last ${minutes} minutes` : "the whole call";
+    const what =
+      since !== null
+        ? `the lines after line ${since} (with up to 2 before, for context)`
+        : minutes > 0 && shown.length < call.lines.length
+          ? `the last ${minutes} minutes`
+          : "the whole call";
     out.push(`Transcript, ${what} (${shown.length} of ${call.lines.length} lines). ${TRANSCRIPT_NOTE}`, "");
     for (const l of shown) out.push(`[${fmtTime(l.t)}] ${l.speaker === "me" ? "Me" : "Them"}: ${l.text}`);
   }
@@ -274,10 +391,31 @@ function minutesArg(value, fallback) {
 
 async function callTool(name, args, ctx) {
   const { db, room, now, app } = ctx;
-  const calls = await loadCalls(db, room, now);
+  let calls = await loadCalls(db, room, now);
   if (name === "get_current_call") {
+    const since = Number.isInteger(Number(args.since_line)) && Number(args.since_line) >= 0 ? Number(args.since_line) : null;
+    // Following the call: wait for new lines (or the end of the call) before answering.
+    const wait = since === null ? 0 : Math.min(MAX_WAIT_S, Math.max(0, Number(args.wait_seconds) || 0));
+    const until = Date.now() + wait * 1000;
+    const news = () => calls.length && (calls[0].lines.length > since || calls[0].status === "ended");
+    while (wait && !news() && Date.now() < until) {
+      await sleep(Math.min(WAIT_POLL_MS, until - Date.now()));
+      calls = await loadCalls(db, room, Date.now());
+    }
     if (!calls.length) return toolText(noCalls(app));
-    return toolText(describeCall(calls[0], minutesArg(args.minutes, 10), now, app));
+    return toolText(describeCall(calls[0], minutesArg(args.minutes, 10), Date.now(), app, since));
+  }
+  if (name === "show_suggestions") {
+    const data = cleanSuggestions(args);
+    if (!data) return toolText("Nothing to show: give at least one suggestion.", true);
+    const call = calls[0];
+    await saveSuggestions(db, room, call ? call.id : null, data, Date.now());
+    if (!call) return toolText(`Saved, but there is no call to show it next to.${app ? ` The user starts one at ${app}.` : ""}`);
+    return toolText(
+      call.status === "ended"
+        ? `Saved with call ${call.id}, which has ended: the user sees it if that call is still open in the Call Assistant.`
+        : `Shown in the Call Assistant window, next to the transcript of call ${call.id}.`,
+    );
   }
   if (name === "list_calls") return toolText(describeList(calls, now, app));
   if (name === "get_call") {
@@ -320,7 +458,8 @@ async function handleRpc(msg, ctx) {
           serverInfo: SERVER_INFO,
           instructions:
             "Live transcript of the user's calls, sent by their Call Assistant web page. " +
-            "Whenever the user asks about the call they are in, call get_current_call again to read the latest lines." +
+            "Whenever the user asks about the call they are in, call get_current_call again to read the latest lines. " +
+            "When you suggest what to say during a call, also send it with show_suggestions: the user sees it next to the transcript." +
             (ctx.app ? ` The Call Assistant page is at ${ctx.app}: the user opens it and presses Start to follow a call.` : ""),
         },
       };
@@ -384,6 +523,7 @@ async function api(request, env, key, action) {
     const calls = await loadCalls(db, room, now);
     return json({ ok: true, calls: calls.length });
   }
+  if (action === "suggestions" && request.method === "GET") return json({ ok: true, suggestions: await loadSuggestions(db, room) });
   if (request.method !== "POST") return json({ ok: false, error: "method" }, 405);
   if (action === "call") {
     let call;
@@ -394,10 +534,15 @@ async function api(request, env, key, action) {
     }
     if (!call) return json({ ok: false, error: "bad_call" }, 400);
     await saveCall(db, room, call, now);
-    return json({ ok: true });
+    // The answer brings back what Claude asked to show for this call, if anything.
+    const suggestions = await loadSuggestions(db, room);
+    return json({ ok: true, suggestions: suggestions && suggestions.callId === call.id ? suggestions : null });
   }
   if (action === "delete") {
-    await db.prepare("DELETE FROM calls WHERE room = ?1").bind(room).run();
+    await db.batch([
+      db.prepare("DELETE FROM calls WHERE room = ?1").bind(room),
+      db.prepare("DELETE FROM suggestions WHERE room = ?1").bind(room),
+    ]);
     return json({ ok: true });
   }
   return json({ ok: false, error: "not_found" }, 404);

@@ -156,6 +156,9 @@ jobs:
           npx wrangler dev --config ../wrangler.jsonc --port 8788 --ip 127.0.0.1 > wrangler-root.log 2>&1 &
           for i in $(seq 1 90); do curl -sf http://127.0.0.1:8788/health > /dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:8788/ | grep -q "<title>Assistente chiamate</title>"
+          # Cross-origin isolation (web/_headers): Whisper gets several CPU threads.
+          curl -sI http://127.0.0.1:8788/ | grep -qi "cross-origin-embedder-policy: credentialless"
+          curl -sI http://127.0.0.1:8788/js/whisper-worker.js | grep -qi "cross-origin-opener-policy: same-origin"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/web/index.html)" = 301
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/tests/e2e.mjs)" = 404
           node test/mcp-client.mjs http://127.0.0.1:8788 || { tail -40 wrangler-root.log; exit 1; }

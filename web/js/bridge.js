@@ -94,22 +94,32 @@ export class Bridge {
     return this.request("POST", "call", JSON.stringify(call));
   }
 
+  /** What Claude last asked to show in the page (its show_suggestions tool), or null. */
+  async suggestions() {
+    return (await this.request("GET", "suggestions")).suggestions || null;
+  }
+
   clear() {
     return this.request("POST", "delete", "");
   }
 }
 
-/** Keeps the bridge up to date with one call session. */
+/**
+ * Keeps the bridge up to date with one call session, and brings back what
+ * Claude asks to show for it (onSuggestions, each time it changes).
+ */
 export class BridgeSync {
-  constructor({ bridge, session, intervalMs = 6000, onState = () => {} }) {
+  constructor({ bridge, session, intervalMs = 2500, onState = () => {}, onSuggestions = () => {} }) {
     this.bridge = bridge;
     this.session = session;
     this.intervalMs = intervalMs;
     this.onState = onState;
+    this.onSuggestions = onSuggestions;
     this.state = null; // "ok" | "error"
     this.sent = null;
     this.busy = null;
     this.timer = null;
+    this.shownAt = null; // updatedAt of the suggestions last passed on
   }
 
   start() {
@@ -134,23 +144,39 @@ export class BridgeSync {
     this.onState(state);
   }
 
+  receive(suggestions) {
+    if (!suggestions || suggestions.callId !== this.session.startedAt.toISOString() || suggestions.updatedAt === this.shownAt) return;
+    this.shownAt = suggestions.updatedAt;
+    this.onSuggestions(suggestions);
+  }
+
   async push(call, signature) {
     try {
-      await this.bridge.send(call);
+      const reply = await this.bridge.send(call);
       this.sent = signature;
+      this.setState("ok");
+      this.receive(reply && reply.suggestions);
+    } catch {
+      this.setState("error");
+    }
+  }
+
+  async poll() {
+    try {
+      this.receive(await this.bridge.suggestions());
       this.setState("ok");
     } catch {
       this.setState("error");
     }
   }
 
-  /** Send the transcript if it changed since the last successful send. */
+  /** Send the transcript if it changed since the last successful send; otherwise look for new suggestions. */
   tick() {
     if (this.busy) return this.busy;
     const s = this.session;
     const signature = `live:${s.store.seq}:${s.store.length}:${s.language}`;
-    if (signature === this.sent) return Promise.resolve();
-    this.busy = this.push(this.snapshot("live"), signature).finally(() => {
+    const job = signature === this.sent ? this.poll() : this.push(this.snapshot("live"), signature);
+    this.busy = job.finally(() => {
       this.busy = null;
     });
     return this.busy;
@@ -158,12 +184,23 @@ export class BridgeSync {
 
   /** The call is over: one last send, marked as ended. */
   async finish() {
-    clearInterval(this.timer);
+    this.stop();
     if (this.busy) await this.busy;
     await this.push(this.snapshot("ended"), "ended");
   }
 
+  /** A new line: send it now (a moment later, to group lines that arrive together) instead of at the next tick. */
+  nudge(delayMs = 300) {
+    if (this.nudged || !this.timer) return;
+    this.nudged = setTimeout(() => {
+      this.nudged = null;
+      this.tick();
+    }, delayMs);
+  }
+
   stop() {
     clearInterval(this.timer);
+    clearTimeout(this.nudged);
+    this.timer = null;
   }
 }

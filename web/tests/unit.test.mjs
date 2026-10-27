@@ -67,6 +67,9 @@ test("segmenter cuts long speech at quiet points", () => {
   const chunks = feed(new Segmenter("them", { maxChunkS: 12 }), speechLike(30));
   assert.ok(chunks.length >= 3);
   assert.ok(chunks.every((c) => c.end - c.start <= 12.1));
+  // By default at most 8 s, so the text of long speech doesn't wait too long.
+  const quick = feed(new Segmenter("them"), speechLike(30));
+  assert.ok(quick.length >= 4 && quick.every((c) => c.end - c.start <= 8.1), quick.map((c) => (c.end - c.start).toFixed(1)).join(" "));
 });
 
 test("segmenter on real synthesized speech (the desktop tests' fixture)", () => {
@@ -160,6 +163,9 @@ test("audio session: segmenter + (scripted) Whisper, and a warning when the call
   assert.equal(s.store.lines[0].text, "Ciao Marco, come stai?");
   assert.ok(result.transcript.length >= 3);
   assert.ok(events.some(([k, p]) => k === "model_ready" && p === "scripted"));
+  // How long after the end of each sentence its text appeared.
+  const latencies = events.filter(([k]) => k === "latency").map(([, p]) => p);
+  assert.ok(latencies.length >= 3 && latencies.every((s) => s >= 0), latencies.join(" ")); // (the test clock jumps: no real delays here)
   assert.ok(events.some(([k, p]) => k === "audio" && p === "fake capture"));
 
   // Only the microphone heard for a while: the shared tab/screen audio is probably missing.
@@ -229,7 +235,13 @@ test("bridge sync sends the call when it changes, reports trouble, marks the end
   const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store, lastInsight: null };
   const calls = [];
   let down = false;
-  const bridge = { send: async (call) => { if (down) throw new BridgeError("unreachable"); calls.push(call); } };
+  const bridge = {
+    send: async (call) => {
+      if (down) throw new BridgeError("unreachable");
+      calls.push(call);
+    },
+    suggestions: async () => null,
+  };
   const states = [];
   const sync = new BridgeSync({ bridge, session, intervalMs: 60000, onState: (s) => states.push(s) });
   await sync.tick();
@@ -265,4 +277,47 @@ test("a page served by its bridge finds it at its own address", async () => {
   // A bridge without its database is worth saying.
   const err = await sameOriginBridge(key, { origin: "https://x.me.workers.dev", fetchImpl: reply(500, { ok: false, error: "no_database" }) }).catch((e) => e);
   assert.equal(err.code, "no_database");
+});
+
+test("bridge sync brings back Claude's suggestions for this call, once each", async () => {
+  const store = new TranscriptStore();
+  const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store };
+  const id = "2026-10-27T09:00:00.000Z";
+  let latest = { callId: id, updatedAt: 1, topic: "Milano", suggestions: [{ kind: "question", text: "Quando inizi?" }], remember: [] };
+  let gets = 0;
+  const bridge = {
+    send: async () => ({ ok: true, suggestions: latest }),
+    suggestions: async () => (gets++, latest),
+  };
+  const shown = [];
+  const sync = new BridgeSync({ bridge, session, intervalMs: 60000, onSuggestions: (s) => shown.push(s.topic) });
+  await sync.tick(); // sends the call; the answer carries the suggestions
+  await sync.tick(); // nothing new to send: asks for suggestions, same as before
+  assert.deepEqual(shown, ["Milano"]);
+  assert.equal(gets, 1);
+  latest = { ...latest, updatedAt: 2, topic: "Il trasloco" };
+  await sync.tick();
+  latest = { ...latest, updatedAt: 3, callId: "another call", topic: "Altro" };
+  await sync.tick();
+  assert.deepEqual(shown, ["Milano", "Il trasloco"]);
+});
+
+test("bridge sync sends a new line at once, not at the next tick", async () => {
+  const store = new TranscriptStore();
+  const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store };
+  const sent = [];
+  const bridge = { send: async (call) => sent.push(call.lines.length), suggestions: async () => null };
+  const sync = new BridgeSync({ bridge, session, intervalMs: 60000 });
+  sync.start();
+  await sync.busy;
+  store.add({ t: 1, speaker: "me", text: "Ciao" });
+  sync.nudge(20);
+  sync.nudge(20); // lines arriving together go in one send
+  await new Promise((r) => setTimeout(r, 80));
+  await sync.busy;
+  assert.deepEqual(sent, [0, 1]);
+  sync.stop();
+  sync.nudge(1); // after Stop, nothing more is sent
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(sent, [0, 1]);
 });

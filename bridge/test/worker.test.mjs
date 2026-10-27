@@ -42,7 +42,7 @@ test("the page saves the call and Claude reads it through MCP", async () => {
 
   const id = "2026-10-27T09:00:00.000Z";
   const saved = await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "live", lang: "it", lines: lines(80) });
-  assert.deepEqual(saved.data, { ok: true });
+  assert.deepEqual(saved.data, { ok: true, suggestions: null });
   assert.equal(saved.headers.get("access-control-allow-origin"), "*");
   assert.deepEqual((await b.call("GET", `/api/${KEY}/status`)).data, { ok: true, calls: 1 });
 
@@ -124,8 +124,9 @@ test("MCP handshake, notifications, errors", async () => {
   assert.equal(note.status, 202);
   assert.deepEqual((await b.rpc("ping")).result, {});
   const tools = (await b.rpc("tools/list")).result.tools;
-  assert.deepEqual(tools.map((x) => x.name), ["get_current_call", "list_calls", "get_call"]);
-  assert.ok(tools.every((x) => x.inputSchema.type === "object" && x.annotations.readOnlyHint));
+  assert.deepEqual(tools.map((x) => x.name), ["get_current_call", "show_suggestions", "list_calls", "get_call"]);
+  assert.ok(tools.every((x) => x.inputSchema.type === "object"));
+  assert.deepEqual(tools.filter((x) => !x.annotations.readOnlyHint).map((x) => x.name), ["show_suggestions"]);
   assert.equal((await b.rpc("resources/list")).error.code, -32601);
   assert.equal((await b.rpc("tools/call", { name: "nope" })).error.code, -32602);
 
@@ -167,8 +168,8 @@ test("what the page sends is cleaned", () => {
 test("ready-made prompts carry the transcript, so Claude answers at once", async () => {
   const b = bridge();
   const list = (await b.rpc("prompts/list")).result.prompts;
-  assert.deepEqual(list.map((p) => p.name), ["cosa_dico_adesso", "cosa_mi_hanno_chiesto", "riassunto_chiamata"]);
-  assert.deepEqual(list.map((p) => p.title), ["Cosa dico adesso?", "Cosa mi hanno chiesto?", "Riassumi la chiamata"]);
+  assert.deepEqual(list.map((p) => p.name), ["segui_la_chiamata", "cosa_dico_adesso", "cosa_mi_hanno_chiesto", "riassunto_chiamata"]);
+  assert.deepEqual(list.map((p) => p.title), ["Segui la chiamata", "Cosa dico adesso?", "Cosa mi hanno chiesto?", "Riassumi la chiamata"]);
   assert.ok(list.every((p) => p.description && Array.isArray(p.arguments) && !p.arguments.length));
 
   const empty = (await b.rpc("prompts/get", { name: "cosa_dico_adesso" })).result;
@@ -180,6 +181,10 @@ test("ready-made prompts carry the transcript, so Claude answers at once", async
   assert.equal(now.messages[0].role, "user");
   const text = now.messages[0].content.text;
   assert.match(text, /^Sono in una chiamata adesso\./);
+  assert.match(text, /show_suggestions/);
+  assert.match(text, /Lines so far: 60\./);
+  const follow = (await b.rpc("prompts/get", { name: "segui_la_chiamata" })).result.messages[0].content.text;
+  assert.match(follow, /since_line = il numero «Lines so far»[\s\S]*wait_seconds = 25[\s\S]*show_suggestions/);
   assert.match(text, /get_current_call/);
   assert.match(text, /Transcript, the last 10 minutes \(41 of 60 lines\)/);
   assert.match(text, /\[14:45\] Them: frase 59\n<\/call>$/);
@@ -216,4 +221,67 @@ test("deployed with the web app: the page, a link to it for Claude, old /web/ li
   const alone = bridge();
   assert.doesNotMatch((await alone.tool("get_current_call")).text, /https?:/);
   assert.equal((await alone.call("GET", "/web/x")).status, 404);
+});
+
+test("Claude shows suggestions in the page: saved for the current call, returned to the page", async () => {
+  const b = bridge();
+  const none = await b.tool("show_suggestions", { suggestions: [{ kind: "question", text: "Quando inizi?" }] });
+  assert.match(none.text, /no call to show it next to/);
+  assert.ok((await b.tool("show_suggestions", { suggestions: [] })).isError);
+
+  await b.call("POST", `/api/${KEY}/call`, { id: "c1", status: "live", lines: lines(3) });
+  const shown = await b.tool("show_suggestions", {
+    topic: "  Giulia e il lavoro a Milano ",
+    suggestions: [
+      { kind: "question", text: "Quando dovresti iniziare?" },
+      { kind: "boh", text: "Secondo me dovresti accettare." },
+      { kind: "answer", text: "   " },
+    ],
+    remember: ["Festa sabato alle 20", ""],
+  });
+  assert.match(shown.text, /^Shown in the Call Assistant window, next to the transcript of call c1\.$/);
+  const expected = {
+    topic: "Giulia e il lavoro a Milano",
+    suggestions: [
+      { kind: "question", text: "Quando dovresti iniziare?" },
+      { kind: "comment", text: "Secondo me dovresti accettare." },
+    ],
+    remember: ["Festa sabato alle 20"],
+  };
+  // The page gets them with its next update of the call, or by asking.
+  const next = (await b.call("POST", `/api/${KEY}/call`, { id: "c1", status: "live", lines: lines(4) })).data.suggestions;
+  assert.equal(next.callId, "c1");
+  assert.deepEqual({ topic: next.topic, suggestions: next.suggestions, remember: next.remember }, expected);
+  assert.equal((await b.call("GET", `/api/${KEY}/suggestions`)).data.suggestions.topic, expected.topic);
+  // A new call doesn't get the old call's suggestions.
+  assert.equal((await b.call("POST", `/api/${KEY}/call`, { id: "c2", status: "live", lines: [] })).data.suggestions, null);
+  assert.equal((await b.call("GET", `/api/${OTHER}/suggestions`)).data.suggestions, null);
+  await b.call("POST", `/api/${KEY}/delete`, "");
+  assert.equal((await b.call("GET", `/api/${KEY}/suggestions`)).data.suggestions, null);
+});
+
+test("following the call: only the new lines, and a read that waits for them", async () => {
+  const b = bridge();
+  await b.call("POST", `/api/${KEY}/call`, { id: "f", status: "live", lines: lines(5) });
+  const after3 = (await b.tool("get_current_call", { since_line: 3 })).text;
+  assert.match(after3, /Lines so far: 5\./);
+  assert.match(after3, /the lines after line 3 \(with up to 2 before, for context\) \(4 of 5 lines\)/);
+  assert.doesNotMatch(after3, /frase 0/);
+  assert.match((await b.tool("get_current_call", { since_line: 5 })).text, /No new lines after line 5 yet\./);
+
+  // Nothing new for a second: the read waits, then says so.
+  let started = Date.now();
+  assert.match((await b.tool("get_current_call", { since_line: 5, wait_seconds: 1 })).text, /No new lines after line 5 yet\./);
+  assert.ok(Date.now() - started >= 900);
+  // New lines while it waits: it answers with them.
+  started = Date.now();
+  const reading = b.tool("get_current_call", { since_line: 5, wait_seconds: 20 });
+  setTimeout(() => b.call("POST", `/api/${KEY}/call`, { id: "f", status: "live", lines: lines(6) }), 300);
+  const fresh = (await reading).text;
+  assert.match(fresh, /Lines so far: 6\.[\s\S]*\[01:15\] Them: frase 5$/);
+  assert.ok(Date.now() - started < 5000, "answered as soon as the line arrived");
+  // The end of the call also ends the wait.
+  setTimeout(() => b.call("POST", `/api/${KEY}/call`, { id: "f", status: "ended", lines: lines(6) }), 300);
+  assert.match((await b.tool("get_current_call", { since_line: 6, wait_seconds: 20 })).text, /Status: ended/);
+  assert.equal((await b.tool("get_current_call", { since_line: 0, wait_seconds: 999 })).text.includes("Lines so far: 6."), true);
 });
