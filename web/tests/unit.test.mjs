@@ -284,29 +284,40 @@ test("bridge sync brings back Claude's suggestions for this call, once each", as
   const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store };
   const id = "2026-10-27T09:00:00.000Z";
   let latest = { callId: id, updatedAt: 1, topic: "Milano", suggestions: [{ kind: "question", text: "Quando inizi?" }], remember: [] };
+  let meeting = null;
   let gets = 0;
   const bridge = {
-    send: async () => ({ ok: true, suggestions: latest }),
-    suggestions: async () => (gets++, latest),
+    send: async () => ({ ok: true, suggestions: latest, meeting }),
+    suggestions: async () => (gets++, { suggestions: latest, meeting }),
   };
   const shown = [];
-  const sync = new BridgeSync({ bridge, session, intervalMs: 60000, onSuggestions: (s) => shown.push(s.topic) });
+  const meetings = [];
+  const sync = new BridgeSync({
+    bridge,
+    session,
+    intervalMs: 60000,
+    onSuggestions: (s) => shown.push(s.topic),
+    onMeeting: (m) => meetings.push(m && m.title),
+  });
   await sync.tick(); // sends the call; the answer carries the suggestions
   await sync.tick(); // nothing new to send: asks for suggestions, same as before
   assert.deepEqual(shown, ["Milano"]);
   assert.equal(gets, 1);
   latest = { ...latest, updatedAt: 2, topic: "Il trasloco" };
+  meeting = { title: "Offerta Milano", goal: "Chiudere la data", updatedAt: 5 };
   await sync.tick();
+  meeting = { ...meeting, updatedAt: 6 }; // same title and goal: not passed on again
   latest = { ...latest, updatedAt: 3, callId: "another call", topic: "Altro" };
   await sync.tick();
   assert.deepEqual(shown, ["Milano", "Il trasloco"]);
+  assert.deepEqual(meetings, [null, "Offerta Milano"]);
 });
 
 test("bridge sync sends a new line at once, not at the next tick", async () => {
   const store = new TranscriptStore();
   const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store };
   const sent = [];
-  const bridge = { send: async (call) => sent.push(call.lines.length), suggestions: async () => null };
+  const bridge = { send: async (call) => sent.push(call.lines.length), suggestions: async () => ({ suggestions: null, meeting: null }) };
   const sync = new BridgeSync({ bridge, session, intervalMs: 60000 });
   sync.start();
   await sync.busy;

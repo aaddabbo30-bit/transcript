@@ -27,6 +27,7 @@ Scrivi:
 3. I punti chiave.
 4. Le cose da fare: chi, cosa, entro quando.
 5. Cosa vale la pena ricordare di me e delle persone della chiamata per le prossime volte.`,
+    followConnector: "Segui la chiamata in corso con il connector della mia pagina Assistente chiamate, fino alla fine, e aiutami in diretta. Usa anche quello che sai di me e il briefing del meeting, se c'è.\nRipeti questo giro:\n1. Chiama get_current_call con since_line = l'ultimo «Lines so far» (0 la prima volta) e wait_seconds = 25: risponde appena arrivano righe nuove.\n2. Se dalle righe nuove viene fuori qualcosa di utile, chiama show_suggestions: l'argomento in una riga, fino a 3 cose che potrei dire adesso (domande o risposte, pronte da dire ad alta voce, nella lingua della chiamata) e le cose da ricordare.\n3. Torna al punto 1.\nNon scrivere nella chat tra un giro e l'altro: guardo la finestra dell'Assistente. Fermati quando la chiamata è finita o dopo 30 giri, e dimmelo in una riga.",
     askConnector: `Usa il connector della mia pagina Assistente chiamate (strumento get_current_call) per leggere la chiamata in corso, poi rispondi brevissimo, lo leggo mentre parlo:
 1. Di cosa si parla, in una riga.
 2. Fino a 3 cose che potrei dire adesso (domande da fare o risposte), pronte da dire ad alta voce, nella lingua della chiamata.
@@ -57,6 +58,7 @@ Write:
 3. The key points.
 4. The action items: who, what, by when.
 5. What is worth remembering about me and the people in the call for next time.`,
+    followConnector: "Follow the call in progress with the connector of my Call Assistant page, until it ends, and help me live. Also use what you know about me and the meeting briefing, if there is one.\nRepeat this round:\n1. Call get_current_call with since_line = the last \"Lines so far\" (0 the first time) and wait_seconds = 25: it answers as soon as new lines arrive.\n2. If the new lines bring something useful, call show_suggestions: the topic in one line, up to 3 things I could say now (questions or answers, ready to say out loud, in the language of the call) and the things to remember.\n3. Go back to step 1.\nDon't write in the chat between rounds: I watch the Call Assistant window. Stop when the call has ended or after 30 rounds, and tell me in one line.",
     askConnector: `Use the connector of my Call Assistant page (the get_current_call tool) to read the call in progress, then answer very briefly, I'll read it while I talk:
 1. What we're talking about, in one line.
 2. Up to 3 things I could say now (questions to ask or answers), ready to say out loud, in the language of the call.
@@ -101,7 +103,7 @@ export function chatSummaryPrompt({ lang = "it", meta, lines }) {
 }
 
 /** With the bridge, Claude reads the call itself: the request is all there is to paste. */
-export function chatConnectorPrompt(lang = "it", kind = "ask") {
+export function chatConnectorPrompt(lang = "it", kind = "follow") {
   const c = CHAT[lang] || CHAT.it;
-  return kind === "summary" ? c.summaryConnector : c.askConnector;
+  return { follow: c.followConnector, ask: c.askConnector, summary: c.summaryConnector }[kind] || c.followConnector;
 }

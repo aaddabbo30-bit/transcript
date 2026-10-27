@@ -131,3 +131,4 @@ body.pip .transcript { max-height: calc(100vh - 190px); }
 .suggestion .text { font-size: 16px; }
 .remember { margin: 0; padding-left: 18px; }
 .remember li { margin: 2px 0; }
+.meeting { margin: 4px 0 8px; padding: 6px 10px; border-radius: 6px; background: var(--card); font-size: 14px; }

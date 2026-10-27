@@ -50,13 +50,13 @@ const saved = await fetch(`${bridge.base}/api/${key}/call`, {
     ],
   }),
 });
-assert.deepEqual(await saved.json(), { ok: true, suggestions: null });
+assert.deepEqual(await saved.json(), { ok: true, suggestions: null, meeting: null });
 
 const client = new Client({ name: "bridge-test", version: "1.0.0" });
 await client.connect(new StreamableHTTPClientTransport(new URL(`${bridge.base}/mcp/${key}`)));
 assert.equal(client.getServerVersion().name, "call-assistant-bridge");
 const { tools } = await client.listTools();
-assert.deepEqual(tools.map((t) => t.name), ["get_current_call", "show_suggestions", "list_calls", "get_call"]);
+assert.deepEqual(tools.map((t) => t.name), ["get_current_call", "show_suggestions", "set_meeting_context", "list_calls", "get_call"]);
 const current = await client.callTool({ name: "get_current_call", arguments: { minutes: 5 } });
 const text = current.content[0].text;
 assert.match(text, /Status: in progress/);

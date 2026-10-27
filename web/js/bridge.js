@@ -94,9 +94,10 @@ export class Bridge {
     return this.request("POST", "call", JSON.stringify(call));
   }
 
-  /** What Claude last asked to show in the page (its show_suggestions tool), or null. */
+  /** What Claude last asked to show in the page (its show_suggestions tool), and the meeting's title and goal. */
   async suggestions() {
-    return (await this.request("GET", "suggestions")).suggestions || null;
+    const data = await this.request("GET", "suggestions");
+    return { suggestions: data.suggestions || null, meeting: data.meeting || null };
   }
 
   clear() {
@@ -109,12 +110,14 @@ export class Bridge {
  * Claude asks to show for it (onSuggestions, each time it changes).
  */
 export class BridgeSync {
-  constructor({ bridge, session, intervalMs = 2500, onState = () => {}, onSuggestions = () => {} }) {
+  constructor({ bridge, session, intervalMs = 2500, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {} }) {
     this.bridge = bridge;
     this.session = session;
     this.intervalMs = intervalMs;
     this.onState = onState;
     this.onSuggestions = onSuggestions;
+    this.onMeeting = onMeeting;
+    this.meeting = undefined; // the briefing's title and goal last passed on (JSON)
     this.state = null; // "ok" | "error"
     this.sent = null;
     this.busy = null;
@@ -144,7 +147,12 @@ export class BridgeSync {
     this.onState(state);
   }
 
-  receive(suggestions) {
+  receive(suggestions, meeting = null) {
+    const m = JSON.stringify(meeting ? { title: meeting.title, goal: meeting.goal } : null);
+    if (m !== this.meeting) {
+      this.meeting = m;
+      this.onMeeting(meeting);
+    }
     if (!suggestions || suggestions.callId !== this.session.startedAt.toISOString() || suggestions.updatedAt === this.shownAt) return;
     this.shownAt = suggestions.updatedAt;
     this.onSuggestions(suggestions);
@@ -155,7 +163,7 @@ export class BridgeSync {
       const reply = await this.bridge.send(call);
       this.sent = signature;
       this.setState("ok");
-      this.receive(reply && reply.suggestions);
+      this.receive(reply && reply.suggestions, reply && reply.meeting);
     } catch {
       this.setState("error");
     }
@@ -163,7 +171,8 @@ export class BridgeSync {
 
   async poll() {
     try {
-      this.receive(await this.bridge.suggestions());
+      const { suggestions, meeting } = await this.bridge.suggestions();
+      this.receive(suggestions, meeting);
       this.setState("ok");
     } catch {
       this.setState("error");
