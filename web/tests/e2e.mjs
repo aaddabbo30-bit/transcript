@@ -328,7 +328,8 @@ await step("settings: speech model loaded by hand, Claude chat link, interface l
   const page = await newPage("");
   await page.click('[data-tab="settings"]');
   // Model loaded by hand (company proxies that check downloads in a tab).
-  assert.equal(await page.locator("#manual-links a").count(), 2);
+  assert.equal(await page.locator("#manual-links a").count(), 7);
+  assert.equal(await page.textContent("#manual-status"), "");
   assert.match(await page.getAttribute("#manual-links a >> nth=0", "href"), /huggingface\.co\/onnx-community\/whisper-base\/resolve\/main\/onnx\/encoder_model_quantized\.onnx$/);
   const onnx = (fill) => Buffer.concat([Buffer.from([0x08, 0x07]), Buffer.alloc(1_100_000, fill)]);
   await page.setInputFiles("#manual-files", [
@@ -338,9 +339,21 @@ await step("settings: speech model loaded by hand, Claude chat link, interface l
   await page.setInputFiles("#manual-files", [
     { name: "encoder_model_quantized.onnx", mimeType: "application/octet-stream", buffer: onnx(1) },
   ]);
-  await page.waitForFunction(() => /Manca ancora: decoder_model_merged_quantized\.onnx/.test(document.querySelector("#manual-status").textContent));
+  await page.waitForFunction(() => /Manca ancora: decoder_model_merged_quantized\.onnx, config\.json, /.test(document.querySelector("#manual-status").textContent));
   await page.setInputFiles("#manual-files", [
     { name: "decoder_model_merged_quantized (1).onnx", mimeType: "application/octet-stream", buffer: onnx(2) },
+  ]);
+  await page.waitForFunction(() => /Manca ancora: config\.json, generation_config\.json, preprocessor_config\.json, tokenizer\.json, tokenizer_config\.json\.$/.test(document.querySelector("#manual-status").textContent));
+  // A security-check page saved under a .json name is refused too.
+  await page.setInputFiles("#manual-files", [{ name: "config.json", mimeType: "application/json", buffer: Buffer.from("Access blocked by policy") }]);
+  await page.waitForFunction(() => /config\.json non è il file/.test(document.querySelector("#manual-status").textContent));
+  const json = (name, data) => ({ name, mimeType: "application/json", buffer: Buffer.from(JSON.stringify(data)) });
+  await page.setInputFiles("#manual-files", [
+    json("config.json", { model_type: "whisper" }),
+    json("generation_config.json", {}),
+    json("preprocessor_config.json", {}),
+    json("tokenizer.json", { model: {} }),
+    json("tokenizer_config.json", {}),
   ]);
   await page.waitForFunction(() => /pronto/.test(document.querySelector("#manual-status").textContent));
   const cached = await page.evaluate(async () => {
@@ -348,9 +361,10 @@ await step("settings: speech model loaded by hand, Claude chat link, interface l
     const base = "https://huggingface.co/onnx-community/whisper-base/resolve/main/onnx/";
     const enc = await cache.match(base + "encoder_model_quantized.onnx");
     const dec = await cache.match(base + "decoder_model_merged_quantized.onnx");
-    return [enc && enc.headers.get("content-length"), dec && (await dec.arrayBuffer()).byteLength];
+    const config = await cache.match(base.replace("onnx/", "") + "config.json");
+    return [enc && enc.headers.get("content-length"), dec && (await dec.arrayBuffer()).byteLength, config && (await config.json()).model_type];
   });
-  assert.deepEqual(cached, ["1100002", 1100002]);
+  assert.deepEqual(cached, ["1100002", 1100002, "whisper"]);
   await page.fill("#claude-url", "https://example.com/chat");
   await page.click("#settings-save");
   assert.match(await page.textContent("#settings-status"), /claude\.ai/);

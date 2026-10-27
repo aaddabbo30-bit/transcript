@@ -6,7 +6,7 @@ import { BrowserAudioCapture, CaptureError, captureSupported } from "./audio.js"
 import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "./bridge.js";
 import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
-import { BIG_FILES, ModelFileError, hasManualModel, importModelFiles, manualDownloadLinks } from "./model-files.js";
+import { ModelFileError, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt } from "./prompts.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
@@ -505,8 +505,11 @@ async function renderManualModel(note = "") {
     li.append(a);
     list.append(li);
   }
-  const ready = await hasManualModel(model);
-  $("manual-status").textContent = [note, ready ? t("manual_ready") : ""].filter(Boolean).join(" ");
+  // Nothing loaded by hand yet: no status. Some files: what is still missing. All of them: ready.
+  const missing = await missingManualFiles(model);
+  const started = missing.length < manualDownloadLinks(model).length;
+  const state = !started ? "" : missing.length ? t("manual_missing", { files: missing.join(", ") }) : t("manual_ready");
+  $("manual-status").textContent = [note, state].filter(Boolean).join(" ");
 }
 
 function renderSettings() {
@@ -619,11 +622,6 @@ function wire() {
       const parts = [];
       if (stored.length) parts.push(t("manual_done", { files: stored.join(", ") }));
       if (skipped.length) parts.push(t("manual_skipped", { files: skipped.join(", ") }));
-      if (!(await hasManualModel(model))) {
-        const missing = [];
-        for (const { name } of manualDownloadLinks(model)) if (!stored.includes(name)) missing.push(name);
-        if (missing.length && missing.length < BIG_FILES.length + 1) parts.push(t("manual_missing", { files: missing.join(", ") }));
-      }
       await renderManualModel(parts.join(" "));
     } catch (err) {
       $("manual-status").textContent = err instanceof ModelFileError ? t("manual_invalid", { file: err.message }) : String(err.message || err);

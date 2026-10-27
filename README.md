@@ -75,11 +75,11 @@ The connector address contains a secret key made by the page and kept in that br
 3. **Always on top.** **⧉ Always on top** moves the live panel into a small window that stays above the call.
 4. **Stop.** Press **Stop** at the end. Then, in Claude, pick **«Riassumi la chiamata»** or ask for a summary. The call is also kept in the app's **History**, where you can download the transcript.
 
-The first time, the Whisper model downloads (about 150 MB for `base`), and the browser keeps it for next time. Some company networks let large downloads through only after a security check in a browser tab; then the page can't download the model by itself. In that case use **Settings → Load the model by hand**:
-- click the two links, so the `.onnx` files download in a tab and pass the check;
-- pick the downloaded files.
+The first time, the Whisper model downloads (about 150 MB for `base`), and the browser keeps it for next time. Some company networks let downloads from Hugging Face through only after a security check in a browser tab; then the page can't download the model by itself. In that case use **Settings → Load the model by hand**:
+- click the 7 links, one at a time, so each file downloads in a tab and passes the check: the two large `.onnx` files and five small `.json` files;
+- press **Choose the downloaded files** and pick all 7.
 
-They are stored in that browser's cache, so the app finds them there.
+They are stored in that browser's cache, so the app finds them there. The status under the button lists what is still missing. Each address (your Worker, GitHub Pages) has its own cache, so load them where you use the app.
 
 **Try it without a call:** press *Try it with a sample call*. The made-up call goes to the bridge too, so you can ask Claude about it.
 
