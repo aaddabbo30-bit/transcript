@@ -12,6 +12,7 @@
   --danger: #ff6b6b;
   --question: #7cc4ff;
   --answer: #7ee0a1;
+  --comment: #c9a7ff;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -31,10 +32,10 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .tabs button { background: transparent; border: 0; padding: 6px 12px; border-radius: 6px; color: var(--muted); cursor: pointer; }
 .tabs button.active { background: var(--card); color: var(--text); }
 
-main { max-width: 760px; margin: 0 auto; padding: 16px; }
+main { max-width: 1120px; margin: 0 auto; padding: 16px; }
 .tab { display: none; }
 .tab.active { display: block; }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin: 0 auto 14px; max-width: 760px; }
 .card h2, .card h3 { margin: 0 0 8px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; border: 0; padding: 0; }
@@ -107,3 +108,26 @@ body.pip .transcript { max-height: calc(100vh - 190px); }
 .claude-head { display: flex; align-items: center; gap: 8px; }
 .claude-box .hint { margin: 6px 0 0; }
 .live-hint { margin: 10px 0 4px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--card); font-size: 14px; }
+
+/* Live panel: Claude's suggestions on the left, the transcript on the right;
+   one above the other in a narrow window (the always-on-top one). */
+.live-body { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+.live-body.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); }
+.live-body.two .transcript { max-height: calc(100vh - 260px); min-height: 240px; }
+@media (max-width: 720px) {
+  .live-body.two { grid-template-columns: minmax(0, 1fr); }
+  .live-body.two .transcript { max-height: 40vh; min-height: 0; }
+}
+.claude-col .section-head:first-child, .transcript-col .section-head:first-child { margin-top: 4px; }
+.topic { margin: 0 0 6px; font-size: 16px; }
+.topic.waiting { color: var(--muted); font-size: 14px; }
+.suggestion { background: var(--card); border-radius: 6px; padding: 7px 10px; margin: 6px 0; cursor: pointer; border: 1px solid transparent; }
+.suggestion:hover { border-color: var(--border); }
+.suggestion.copied { border-color: var(--ok); }
+.suggestion .kind { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.suggestion .kind.question { color: var(--question); }
+.suggestion .kind.answer { color: var(--answer); }
+.suggestion .kind.comment { color: var(--comment); }
+.suggestion .text { font-size: 16px; }
+.remember { margin: 0; padding-left: 18px; }
+.remember li { margin: 2px 0; }

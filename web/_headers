@@ -1,0 +1,7 @@
+# Cloudflare static assets (the app served by its Worker): cross-origin isolation,
+# so the speech model runs on up to 4 CPU threads instead of 1 (onnxruntime-web
+# uses threads only in a crossOriginIsolated page). "credentialless" keeps the
+# scripts and model files from jsDelivr and Hugging Face loading as before.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless

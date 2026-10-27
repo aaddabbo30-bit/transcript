@@ -254,6 +254,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   const context = await newContext();
   await routeBridge(context);
   const page = await context.newPage();
+  await page.setViewportSize({ width: 1200, height: 800 });
   page.on("pageerror", (e) => errors.push(String(e)));
   // (Old links to /web/... are redirected; the bridge's own tests cover it.)
   await page.goto("https://app.test/?engine=scripted&speed=25");
@@ -276,13 +277,36 @@ await step("app served by its bridge: connected by itself, last step in the Call
   await page.click('[data-tab="call"]');
   await page.click("#demo");
   await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length > 10, null, { timeout: 20000 });
-  assert.match(await page.textContent("#live-hint"), /legge lui la chiamata/);
+  assert.ok(await page.isHidden("#live-hint"), "with the bridge, the hint is in Claude's column");
   await page.waitForSelector("#bridge-state.ok");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-live.png"), clip: { x: 0, y: 0, width: 900, height: 620 } });
   // Claude: the ready-made prompt carries the transcript; the tool finds the app's link once the call is over.
   await untilBridge(connector, /Status: in progress[\s\S]*\[\d\d:\d\d\] (Me|Them): /, appEnv);
   const prompt = await mcp(connector, "prompts/get", { name: "cosa_dico_adesso" }, appEnv);
   assert.match(prompt.messages[0].content.text, /^Sono in una chiamata adesso\.[\s\S]*<call>\nCall /);
+  // Claude's suggestions, sent with show_suggestions, appear left of the transcript.
+  assert.ok(await page.evaluate(() => document.getElementById("live-body").classList.contains("two")));
+  assert.match(await page.textContent("#sug-topic"), /Segui la chiamata/);
+  const shown = await mcp(connector, "tools/call", {
+    name: "show_suggestions",
+    arguments: {
+      topic: "Giulia ha un'offerta di lavoro a Milano",
+      suggestions: [
+        { kind: "question", text: "Quando dovresti iniziare?" },
+        { kind: "answer", text: "Secondo me è un'ottima occasione." },
+      ],
+      remember: ["Decidere entro venerdì"],
+    },
+  }, appEnv);
+  assert.match(shown.content[0].text, /^Shown in the Call Assistant window/);
+  await page.waitForFunction(() => document.querySelectorAll("#suggestions .suggestion").length === 2, null, { timeout: 15000 });
+  assert.equal(await page.textContent("#sug-topic"), "Giulia ha un'offerta di lavoro a Milano");
+  assert.match(await page.textContent("#suggestions .suggestion >> nth=0"), /^DomandaQuando dovresti iniziare\?$/);
+  assert.equal(await page.textContent("#remember"), "Decidere entro venerdì");
+  assert.match(await page.textContent("#sug-time"), /^aggiornati alle /);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-suggestions.png"), clip: { x: 0, y: 0, width: 1200, height: 640 } });
+  await page.click("#suggestions .suggestion >> nth=0");
+  assert.equal(await clipboard(page), "Quando dovresti iniziare?");
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
   assert.match(await page.textContent("#ended-hint"), /Claude ha tutta la chiamata/);

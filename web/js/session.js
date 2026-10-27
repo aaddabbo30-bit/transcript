@@ -3,7 +3,7 @@
 // «Ask Claude» copies; this file only listens and writes it down.
 // The page receives (kind, payload) events through onEvent.
 
-import { AudioRouter, ME, THEM } from "./segmenter.js";
+import { AudioRouter, ME, TARGET_RATE, THEM } from "./segmenter.js";
 import { TranscriptStore, cleanTranscription } from "./transcript.js";
 
 const BACKLOG_WARNING = 6;
@@ -80,11 +80,16 @@ export class CallSession {
 
   async transcribe(chunk) {
     if (!this.transcriber || this.transcriberFailed) return;
+    // When the speech ended (the audio is handed over to the worker, so measure it now).
+    const end = chunk.start + chunk.audio.length / TARGET_RATE;
     const job = (async () => {
       await this.transcriberReady;
       if (this.transcriberFailed) return;
       const text = cleanTranscription(await this.transcriber.transcribe(chunk.audio, this.language));
-      if (text) this.addLine({ t: chunk.start, speaker: chunk.source, text });
+      if (text) {
+        this.addLine({ t: chunk.start, speaker: chunk.source, text });
+        this.emit("latency", Math.max(0, this.elapsed() - end)); // seconds from the end of the speech to its text
+      }
     })();
     this.pendingTranscriptions.add(job);
     job.finally(() => this.pendingTranscriptions.delete(job));

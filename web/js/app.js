@@ -160,7 +160,14 @@ function renderSetup() {
 
 function resetLive() {
   $("transcript").innerHTML = "";
-  $("live-hint").textContent = bridgeActive() ? t("live_hint_connector") : t("live_hint_copy");
+  // With the bridge, Claude's suggestions sit on the left of the transcript; without it, what to do instead.
+  const withClaude = bridgeActive();
+  show($("claude-col"), withClaude);
+  $("live-body").classList.toggle("two", withClaude);
+  show($("live-hint"), !withClaude);
+  $("live-hint").textContent = t("live_hint_copy");
+  showSuggestions(null);
+  showLatency(null);
   setBridgeState(null);
   $("timer").textContent = "00:00";
   setNotice($("notice"), "");
@@ -217,7 +224,7 @@ async function startCall({ demo = false } = {}) {
   try {
     await session.start();
     if (bridgeActive()) {
-      bridgeSync = new BridgeSync({ bridge: makeBridge(), session, onState: setBridgeState });
+      bridgeSync = new BridgeSync({ bridge: makeBridge(), session, onState: setBridgeState, onSuggestions: showSuggestions });
       bridgeSync.start();
     }
   } catch (err) {
@@ -237,6 +244,10 @@ function handleEvent(kind, payload) {
       break;
     case "transcript":
       addTranscriptLine(payload);
+      if (bridgeSync) bridgeSync.nudge();
+      break;
+    case "latency":
+      showLatency(payload);
       break;
     case "warning":
       setNotice($("notice"), message(payload), "warn");
@@ -277,6 +288,48 @@ function addTranscriptLine(line) {
   box.append(div);
   while (box.childElementCount > 300) box.firstElementChild.remove();
   if (atEnd) box.scrollTop = box.scrollHeight;
+}
+
+/** How long after the end of a sentence its text appears: the average of the last few. */
+let latencies = [];
+function showLatency(seconds) {
+  latencies = seconds === null ? [] : [...latencies, seconds].slice(-5);
+  const avg = latencies.reduce((a, b) => a + b, 0) / Math.max(1, latencies.length);
+  $("latency").textContent = latencies.length ? t("latency", { s: avg.toFixed(1) }) : "";
+}
+
+/** What Claude sent with show_suggestions (null: the hint to ask for it). */
+function showSuggestions(s) {
+  const topic = $("sug-topic");
+  topic.textContent = s ? s.topic || "—" : t("sug_waiting");
+  topic.className = s ? "topic" : "topic waiting";
+  $("sug-time").textContent = s ? t("sug_updated", { time: new Date(s.updatedAt).toLocaleTimeString() }) : "";
+  const list = $("suggestions");
+  list.innerHTML = "";
+  for (const item of (s && s.suggestions) || []) {
+    const card = document.createElement("div");
+    card.className = "suggestion";
+    card.title = t("click_to_copy");
+    const kind = document.createElement("div");
+    kind.className = `kind ${item.kind}`;
+    kind.textContent = t(`kind_${item.kind}`);
+    const text = document.createElement("div");
+    text.className = "text";
+    text.textContent = item.text;
+    card.append(kind, text);
+    card.addEventListener("click", async (e) => {
+      if (await copyText(item.text, e.view || window)) card.classList.add("copied");
+    });
+    list.append(card);
+  }
+  const remember = (s && s.remember) || [];
+  $("remember").innerHTML = "";
+  for (const item of remember) {
+    const li = document.createElement("li");
+    li.textContent = item;
+    $("remember").append(li);
+  }
+  show($("sug-remember-box"), remember.length > 0);
 }
 
 function tick() {
