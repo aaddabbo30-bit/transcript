@@ -491,7 +491,10 @@ function renderHistory() {
 }
 
 // -------------------------------------------------------------- settings
+let manualRender = 0; // the latest status wins: an older check finishing late doesn't overwrite it
+
 async function renderManualModel(note = "") {
+  const ticket = ++manualRender;
   const model = $("whisper-model").value || settings.whisperModel;
   const list = $("manual-links");
   list.innerHTML = "";
@@ -507,6 +510,7 @@ async function renderManualModel(note = "") {
   }
   // Nothing loaded by hand yet: no status. Some files: what is still missing. All of them: ready.
   const missing = await missingManualFiles(model);
+  if (ticket !== manualRender) return;
   const started = missing.length < manualDownloadLinks(model).length;
   const state = !started ? "" : missing.length ? t("manual_missing", { files: missing.join(", ") }) : t("manual_ready");
   $("manual-status").textContent = [note, state].filter(Boolean).join(" ");
@@ -624,6 +628,7 @@ function wire() {
       if (skipped.length) parts.push(t("manual_skipped", { files: skipped.join(", ") }));
       await renderManualModel(parts.join(" "));
     } catch (err) {
+      manualRender++;
       $("manual-status").textContent = err instanceof ModelFileError ? t("manual_invalid", { file: err.message }) : String(err.message || err);
     }
     e.target.value = "";

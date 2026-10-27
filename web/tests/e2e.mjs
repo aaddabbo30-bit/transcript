@@ -100,7 +100,12 @@ async function step(name, fn) {
     failed = true;
     console.log(`not ok - ${name}\n  ${String(err.stack || err).split("\n").slice(0, 6).join("\n  ")}`);
     // On GitHub, also an annotation: readable on the check without opening the log.
-    if (process.env.GITHUB_ACTIONS) console.log(`::error title=e2e: ${name}::${String(err.message || err).split("\n")[0].slice(0, 300)}`);
+    if (process.env.GITHUB_ACTIONS) {
+      const escape = (s) => s.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+      const title = escape(`e2e: ${name}`).replace(/:/g, "%3A").replace(/,/g, "%2C");
+      const where = (String(err.stack || "").match(/e2e\.mjs:(\d+)/) || [])[1];
+      console.log(`::error title=${title}${where ? ` (line ${where})` : ""}::${escape(String(err.message || err).split("\n").slice(0, 3).join("\n"))}`);
+    }
   }
 }
 
