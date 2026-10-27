@@ -1,12 +1,13 @@
 // The page: tabs, the live call panel, summary, memory, history and settings.
 
 import { BrowserAudioCapture, CaptureError, captureSupported } from "./audio.js";
+import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey } from "./bridge.js";
 import { ClaudeClient, FakeClaude } from "./claude.js";
 import { download, deleteCall, loadCalls, saveCall, summaryMarkdown, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
 import { Memory, MemoryPathError } from "./memory.js";
 import { BIG_FILES, ModelFileError, hasManualModel, importModelFiles, manualDownloadLinks } from "./model-files.js";
-import { chatAskPrompt, chatSummaryPrompt } from "./prompts.js";
+import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt } from "./prompts.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
 import { fmtTime, parseTranscript } from "./transcript.js";
@@ -29,6 +30,9 @@ const DEFAULTS = {
   summaryModel: "claude-opus-5-5",
   transcriptWindow: 240,
   claudeUrl: "", // chat that «Ask Claude» opens; "" = a new chat
+  bridgeUrl: "", // the user's bridge to Claude (bridge/), e.g. https://call-assistant-bridge.x.workers.dev
+  bridgeKey: "", // secret part of the bridge addresses, made on first use
+  bridgeOn: false,
 };
 const CLAUDE_NEW_CHAT = "https://claude.ai/new";
 
@@ -70,6 +74,7 @@ let copiedUntil = 0;
 let pipWindow = null;
 let claudeOpened = false; // the Claude chat was opened from this page
 let notesSentTo = null; // the session whose first «Ask Claude» carried the personal notes
+let bridgeSync = null; // sends the running call to the bridge
 
 // ------------------------------------------------------------------ helpers
 function applyTranslations() {
@@ -133,7 +138,9 @@ function resetLive() {
   $("transcript").innerHTML = "";
   $("suggestions").innerHTML = "";
   $("remember").innerHTML = "";
-  $("topic").textContent = session && session.insightsDisabled ? t("waiting_chat") : t("waiting_more");
+  const waiting = bridgeActive() ? "waiting_connector" : "waiting_chat";
+  $("topic").textContent = session && session.insightsDisabled ? t(waiting) : t("waiting_more");
+  setBridgeState(null);
   $("topic").className = "topic waiting";
   $("cost").textContent = "$0.0000";
   // Without an API key there are no automatic suggestions, nor costs.
@@ -199,8 +206,14 @@ async function startCall({ demo = false } = {}) {
   show($("summary"), false);
   show($("live"), true);
   resetLive();
+  if (bridgeSync) bridgeSync.stop();
+  bridgeSync = null;
   try {
     await session.start();
+    if (bridgeActive()) {
+      bridgeSync = new BridgeSync({ bridge: makeBridge(), session, onState: setBridgeState });
+      bridgeSync.start();
+    }
   } catch (err) {
     const text = err instanceof CaptureError && t(err.code) !== err.code ? t(err.code) : t("capture_failed", { error: err.message });
     session.abort();
@@ -247,6 +260,8 @@ function handleEvent(kind, payload) {
       });
       break;
     case "summary":
+      if (bridgeSync) bridgeSync.finish((payload.data && payload.data.summary) || "");
+      bridgeSync = null;
       showSummary(payload);
       break;
     default:
@@ -361,7 +376,9 @@ async function askClaude(e) {
   }
   // The personal notes go with the first request only: the chat keeps them.
   const notes = notesSentTo === session ? "" : personalNotes();
-  const text = chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines, notes });
+  const text = bridgeActive()
+    ? chatConnectorPrompt(settings.uiLanguage, "ask")
+    : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines, notes });
   if (await sendToClaude(text, view, !claudeOpened)) {
     notesSentTo = session;
     setNotice($("notice"), t("ask_copied"), "ok");
@@ -371,15 +388,55 @@ async function askClaude(e) {
 async function summaryWithClaude(e) {
   if (!lastResult) return;
   const meta = `${new Date(lastResult.startedAt).toLocaleString()}, ${fmtTime(lastResult.durationS)}`;
-  const text = chatSummaryPrompt({
-    lang: settings.uiLanguage,
-    meta,
-    lines: lastResult.transcript,
-    liveRemember: lastResult.liveRemember || [],
-    notes: personalNotes(),
-  });
+  const text = bridgeActive()
+    ? chatConnectorPrompt(settings.uiLanguage, "summary")
+    : chatSummaryPrompt({
+        lang: settings.uiLanguage,
+        meta,
+        lines: lastResult.transcript,
+        liveRemember: lastResult.liveRemember || [],
+        notes: personalNotes(),
+      });
   const ok = await sendToClaude(text, e.view || window, true);
   setNotice($("summary-claude-status"), t(ok ? "ask_copied" : "ask_copy_failed"), ok ? "ok" : "error");
+}
+
+// ------------------------------------------------------------------ bridge
+// With the user's bridge (bridge/ in the repository) Claude reads the call
+// itself, as a custom connector on claude.ai.
+
+function bridgeActive() {
+  return Boolean(settings.bridgeOn && settings.bridgeUrl && settings.bridgeKey);
+}
+
+function makeBridge(url = settings.bridgeUrl) {
+  if (!settings.bridgeKey) {
+    settings.bridgeKey = newBridgeKey();
+    saveSettings();
+  }
+  return new Bridge({ url, key: settings.bridgeKey });
+}
+
+function bridgeMessage(err) {
+  const code = err instanceof BridgeError ? err.code : "failed";
+  return t({ unreachable: "bridge_unreachable", not_found: "bridge_not_found", no_database: "bridge_no_db" }[code] || "bridge_failed");
+}
+
+function renderBridge(message = "") {
+  $("bridge-url").value = settings.bridgeUrl;
+  $("bridge-connector").value = bridgeActive() ? makeBridge().connectorUrl : "";
+  show($("bridge-connector-box"), bridgeActive());
+  show($("bridge-off"), bridgeActive());
+  $("bridge-status").textContent = message;
+}
+
+/** The small "Claude connected" note in the live panel. */
+function setBridgeState(state) {
+  const el = $("bridge-state");
+  el.className = `bridge-state small ${state || ""}`;
+  el.textContent = state === "ok" ? t("bridge_live_ok") : state === "error" ? t("bridge_live_error") : "";
+  show(el, Boolean(state));
+  if (state === "error") setNotice($("notice"), t("bridge_down"), "warn");
 }
 
 async function stopCall() {
@@ -395,7 +452,7 @@ function showSummary(result) {
   const d = call.data || {};
   $("summary-title").textContent = d.title || t("summary_title");
   $("summary-meta").textContent = `${new Date(call.startedAt).toLocaleString()} · ${fmtTime(call.durationS)} · $${call.cost.toFixed(4)}`;
-  if (call.error === "no API key") setNotice($("summary-error"), t("summary_no_key"), "");
+  if (call.error === "no API key") setNotice($("summary-error"), t(bridgeActive() ? "summary_no_key_connector" : "summary_no_key"), "");
   else setNotice($("summary-error"), call.error ? t("summary_failed", { error: call.error }) : "", "warn");
   setNotice($("summary-claude-status"), "");
   $("summary-body").textContent = d.summary || "";
@@ -583,6 +640,7 @@ function renderSettings() {
   $("summary-model").value = settings.summaryModel;
   $("ui-language").value = settings.uiLanguage;
   $("claude-url").value = settings.claudeUrl;
+  renderBridge();
   $("key-status").textContent = "";
   $("settings-status").textContent = "";
 }
@@ -602,6 +660,51 @@ function wire() {
   $("refresh").addEventListener("click", () => session && session.requestInsight());
   $("pip").addEventListener("click", openPip);
   $("ask-claude").addEventListener("click", askClaude);
+  $("bridge-connect").addEventListener("click", async () => {
+    const url = cleanBridgeUrl($("bridge-url").value);
+    if (!url) {
+      $("bridge-status").textContent = t("bridge_bad_url");
+      return;
+    }
+    $("bridge-status").textContent = "…";
+    try {
+      await makeBridge(url).status();
+      settings = { ...settings, bridgeUrl: url, bridgeOn: true };
+      saveSettings();
+      renderBridge(t("bridge_ok"));
+    } catch (err) {
+      $("bridge-status").textContent = bridgeMessage(err);
+    }
+  });
+  $("bridge-off").addEventListener("click", () => {
+    settings = { ...settings, bridgeOn: false };
+    saveSettings();
+    if (bridgeSync) bridgeSync.stop();
+    bridgeSync = null;
+    setBridgeState(null);
+    renderBridge(t("bridge_off_done"));
+  });
+  $("bridge-copy").addEventListener("click", async (e) => {
+    if (await copyText($("bridge-connector").value, e.view || window)) $("bridge-status").textContent = t("copied");
+  });
+  $("bridge-clear").addEventListener("click", async () => {
+    try {
+      await makeBridge().clear();
+      $("bridge-status").textContent = t("bridge_cleared");
+    } catch (err) {
+      $("bridge-status").textContent = bridgeMessage(err);
+    }
+  });
+  $("bridge-new-key").addEventListener("click", async () => {
+    try {
+      await makeBridge().clear(); // the old address stops working: don't leave its calls behind
+    } catch {
+      /* they expire within 48 hours anyway */
+    }
+    settings = { ...settings, bridgeKey: newBridgeKey() };
+    saveSettings();
+    renderBridge(t("bridge_new_key_done"));
+  });
   $("summary-claude").addEventListener("click", summaryWithClaude);
   $("live-language").addEventListener("change", (e) => {
     settings.callLanguage = e.target.value;

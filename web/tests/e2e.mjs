@@ -11,6 +11,8 @@ import { extname, join, normalize } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { currentStamp } from "../tools/stamp.mjs";
+import worker from "../../bridge/src/worker.js";
+import { memoryD1 } from "../../bridge/test/d1.mjs";
 
 // CommonJS require also finds a globally installed Playwright (NODE_PATH).
 const { chromium } = createRequire(import.meta.url)("playwright");
@@ -216,6 +218,85 @@ await step("always-on-top window: the live panel keeps updating there, and Stop 
   await pip.click("#stop");
   await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
   assert.ok(await page.evaluate(() => Boolean(document.getElementById("live"))), "the panel is back in the page");
+  await page.context().close();
+});
+
+// The user's bridge (bridge/src/worker.js), run here on Node's SQLite: the page
+// reaches it at https://bridge.test, Claude's side is a direct MCP request.
+const bridgeEnv = { DB: memoryD1() };
+
+async function routeBridge(context) {
+  await context.route("https://bridge.test/**", async (route) => {
+    const req = route.request();
+    const res = await worker.fetch(
+      new Request(req.url(), {
+        method: req.method(),
+        headers: { "content-type": (await req.headerValue("content-type")) || "text/plain" },
+        body: ["GET", "HEAD"].includes(req.method()) ? undefined : req.postDataBuffer(),
+      }),
+      bridgeEnv,
+    );
+    await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
+  });
+  await context.route("https://down.test/**", (route) => route.abort("connectionrefused"));
+}
+
+async function readBridge(connector, name, args = {}) {
+  const res = await worker.fetch(
+    new Request(connector, { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) }),
+    bridgeEnv,
+  );
+  return (await res.json()).result.content[0].text;
+}
+
+async function untilBridge(connector, pattern, tries = 60) {
+  let text = "";
+  for (let i = 0; i < tries && !pattern.test(text); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    text = await readBridge(connector, "get_current_call");
+  }
+  assert.match(text, pattern);
+  return text;
+}
+
+await step("Claude connector: the page sends the call to the bridge, Claude reads it over MCP", async () => {
+  const page = await newPage("?engine=scripted", { apiKey: "" });
+  await routeBridge(page.context());
+  await page.click('[data-tab="settings"]');
+  await page.fill("#bridge-url", "https://down.test");
+  await page.click("#bridge-connect");
+  await page.waitForFunction(() => /Non riesco a raggiungere il ponte/.test(document.querySelector("#bridge-status").textContent));
+  assert.ok(await page.isHidden("#bridge-connector-box"));
+  await page.fill("#bridge-url", "bridge.test/");
+  await page.click("#bridge-connect");
+  await page.waitForFunction(() => /^Collegato/.test(document.querySelector("#bridge-status").textContent));
+  const connector = await page.inputValue("#bridge-connector");
+  assert.match(connector, /^https:\/\/bridge\.test\/mcp\/[A-Za-z0-9_-]{32}$/);
+  await page.click("#bridge-copy");
+  assert.equal(await clipboard(page), connector);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-connector.png"), fullPage: true });
+
+  await page.click('[data-tab="call"]');
+  await page.uncheck("#src-shared");
+  await page.click("#start");
+  await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length >= 2, null, { timeout: 30000 });
+  assert.match(await page.textContent("#topic"), /legge questa chiamata dal ponte/);
+  // Claude's side: the transcript arrives within a few seconds.
+  const live = await untilBridge(connector, /Me: frase di prova 2/);
+  assert.match(live, /Status: in progress/);
+  await page.waitForSelector("#bridge-state.ok");
+  // «Ask Claude» now copies only the request: Claude reads the call itself.
+  await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
+  assert.match(await clipboard(page), /^Usa il connector della mia pagina Assistente chiamate \(strumento get_current_call\)/);
+
+  await page.click("#stop");
+  await page.waitForSelector("#summary:not(.hidden)", { timeout: 20000 });
+  assert.match(await page.textContent("#summary-error"), /legge la chiamata dal ponte/);
+  await untilBridge(connector, /Status: ended/);
+  await page.click('[data-tab="settings"]');
+  await page.click("#bridge-clear");
+  await page.waitForFunction(() => /^Fatto/.test(document.querySelector("#bridge-status").textContent));
+  assert.match(await readBridge(connector, "list_calls"), /^No calls yet/);
   await page.context().close();
 });
 
