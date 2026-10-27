@@ -101,6 +101,8 @@ You can do steps 1–3 from any computer, for example at home.
    3. Connect GitHub when asked, then press **Create and deploy**. Cloudflare copies the `bridge` folder into a new repository of yours and publishes it, together with its database.
    4. At the end, copy the Worker's address. It looks like `https://call-assistant-bridge.<your-name>.workers.dev`.
    5. Open that address in the browser. It should say *Call Assistant bridge: running*.
+
+   Connected the whole repository instead (**Workers & Pages → Import a repository**)? That works too: the `wrangler.jsonc` at the root of the repository deploys the bridge. The address is then `https://<worker-name>.<your-name>.workers.dev`, and every merge into `main` updates it.
 2. **Connect the page.**
    1. Go to **Settings → Connect Claude directly**, paste the address and press **Connect and test**.
    2. The page shows the **connector address**. Copy it.

@@ -1,0 +1,11 @@
+// Deploying this repository to Cloudflare as it is (Workers & Pages → Import a
+// repository) publishes the Claude bridge from bridge/, not the files of the
+// repository. Same Worker as bridge/wrangler.jsonc, which the Deploy button uses.
+{
+  "$schema": "https://unpkg.com/wrangler@4.149.0/config-schema.json",
+  "name": "call-assistant-bridge",
+  "main": "bridge/src/worker.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "d1_databases": [{ "binding": "DB", "database_name": "call-assistant-bridge" }]
+}
