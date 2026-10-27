@@ -115,7 +115,7 @@ test("MCP handshake, notifications, errors", async () => {
   const b = bridge();
   const init = await b.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
   assert.equal(init.result.protocolVersion, "2025-06-18");
-  assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } });
+  assert.deepEqual(init.result.capabilities, { tools: { listChanged: false }, prompts: { listChanged: false } });
   assert.equal(init.result.serverInfo.name, "call-assistant-bridge");
   const unknownVersion = await b.rpc("initialize", { protocolVersion: "1999-01-01" });
   assert.equal(unknownVersion.result.protocolVersion, "2025-11-25");
@@ -162,4 +162,58 @@ test("what the page sends is cleaned", () => {
   assert.equal(cleanCall(null), null);
   const text = describeCall({ ...call, updatedAt: 0, startedAt: "s", remember: ["Festa sabato"] }, 10, 1000);
   assert.match(text, /Points the live assistant noted:\n- Festa sabato$/);
+});
+
+test("ready-made prompts carry the transcript, so Claude answers at once", async () => {
+  const b = bridge();
+  const list = (await b.rpc("prompts/list")).result.prompts;
+  assert.deepEqual(list.map((p) => p.name), ["cosa_dico_adesso", "cosa_mi_hanno_chiesto", "riassunto_chiamata"]);
+  assert.deepEqual(list.map((p) => p.title), ["Cosa dico adesso?", "Cosa mi hanno chiesto?", "Riassumi la chiamata"]);
+  assert.ok(list.every((p) => p.description && Array.isArray(p.arguments) && !p.arguments.length));
+
+  const empty = (await b.rpc("prompts/get", { name: "cosa_dico_adesso" })).result;
+  assert.match(empty.messages[0].content.text, /<call>\nNo calls yet\./);
+
+  await b.call("POST", `/api/${KEY}/call`, { id: "x", status: "live", lines: lines(60) });
+  const now = (await b.rpc("prompts/get", { name: "cosa_dico_adesso" })).result;
+  assert.equal(now.messages.length, 1);
+  assert.equal(now.messages[0].role, "user");
+  const text = now.messages[0].content.text;
+  assert.match(text, /^Sono in una chiamata adesso\./);
+  assert.match(text, /get_current_call/);
+  assert.match(text, /Transcript, the last 10 minutes \(41 of 60 lines\)/);
+  assert.match(text, /\[14:45\] Them: frase 59\n<\/call>$/);
+  const summary = (await b.rpc("prompts/get", { name: "riassunto_chiamata" })).result.messages[0].content.text;
+  assert.match(summary, /the whole call \(60 of 60 lines\)/);
+  assert.match((await b.rpc("prompts/get", { name: "cosa_mi_hanno_chiesto" })).result.messages[0].content.text, /the last 5 minutes/);
+  assert.equal((await b.rpc("prompts/get", { name: "nope" })).error.code, -32602);
+});
+
+test("deployed with the web app: the page, a link to it for Claude, old /web/ links", async () => {
+  const assets = [];
+  const ASSETS = { fetch: async (req) => (assets.push(new URL(req.url).pathname), new Response("<!doctype html>app", { headers: { "content-type": "text/html" } })) };
+  const b = bridge({ DB: memoryD1(), ASSETS });
+  const page = await b.call("GET", "/");
+  assert.equal(page.data, "<!doctype html>app");
+  await b.call("GET", "/js/app.js?v=1");
+  assert.deepEqual(assets, ["/", "/js/app.js"]);
+  const old = await b.call("GET", "/web/js/app.js?v=1");
+  assert.equal(old.status, 301);
+  assert.equal(old.headers.get("location"), `${BASE}/js/app.js?v=1`);
+  assert.match((await b.call("GET", "/health")).data, /^Call Assistant bridge: running\. The app is at \/\.$/);
+
+  // No call yet: Claude gets the link to give the user.
+  assert.match((await b.tool("get_current_call")).text, new RegExp(`opens the Call Assistant at ${BASE}/ and presses Start`));
+  const init = await b.rpc("initialize", { protocolVersion: "2025-06-18" });
+  assert.match(init.result.instructions, new RegExp(`page is at ${BASE}/`));
+  await b.call("POST", `/api/${KEY}/call`, { id: "x", status: "ended", lines: lines(2) });
+  assert.match((await b.tool("get_current_call")).text, new RegExp(`Status: ended\\. To follow a new call, the user opens the Call Assistant at ${BASE}/`));
+  // The API and MCP still answer before the static files.
+  assert.deepEqual((await b.call("GET", `/api/${KEY}/status`)).data, { ok: true, calls: 1 });
+  assert.equal(assets.length, 2);
+
+  // The bridge alone (Deploy button): no page, no link.
+  const alone = bridge();
+  assert.doesNotMatch((await alone.tool("get_current_call")).text, /https?:/);
+  assert.equal((await alone.call("GET", "/web/x")).status, 404);
 });

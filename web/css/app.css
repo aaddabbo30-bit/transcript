@@ -12,7 +12,6 @@
   --danger: #ff6b6b;
   --question: #7cc4ff;
   --answer: #7ee0a1;
-  --comment: #c9a7ff;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -62,7 +61,6 @@ button:disabled { opacity: .5; cursor: default; }
 .notice.warn { color: var(--warn); }
 .notice.error { color: var(--danger); }
 .notice.ok { color: var(--ok); }
-.prompt { margin: 8px 0; padding: 10px; background: var(--card); border-left: 3px solid var(--accent); color: var(--accent); font-size: 13px; }
 
 /* The live panel (also used inside the Picture-in-Picture window) */
 .panel { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 0 12px 12px; }
@@ -75,18 +73,7 @@ button:disabled { opacity: .5; cursor: default; }
 .dot.busy { background: var(--accent); }
 .dot.error { background: var(--danger); }
 .section-head { display: flex; align-items: center; gap: 6px; margin-top: 12px; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
-.topic { margin: 0; font-size: 16px; }
-.topic.waiting { color: var(--muted); font-size: 14px; }
-.suggestion { background: var(--card); border-radius: 6px; padding: 7px 10px; margin: 4px 0; cursor: pointer; border: 1px solid transparent; }
-.suggestion:hover { border-color: var(--border); }
-.suggestion .kind { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
-.suggestion .kind.question { color: var(--question); }
-.suggestion .kind.answer { color: var(--answer); }
-.suggestion .kind.comment { color: var(--comment); }
-.suggestion .text { font-size: 16px; }
-.remember { margin: 0; padding-left: 18px; }
-.remember li { margin: 2px 0; }
-.transcript { max-height: 180px; overflow-y: auto; background: var(--panel); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+.transcript { max-height: 420px; overflow-y: auto; background: var(--panel); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
 .transcript .line { margin: 2px 0; }
 .transcript .time { color: var(--muted); margin-right: 4px; }
 .transcript .me { color: var(--answer); font-weight: 700; }
@@ -95,11 +82,8 @@ button:disabled { opacity: .5; cursor: default; }
 /* Inside the always-on-top window: compact, fills the window */
 body.pip { padding: 0; }
 body.pip .panel { border: 0; border-radius: 0; min-height: 100vh; }
-body.pip .transcript { max-height: 30vh; }
+body.pip .transcript { max-height: calc(100vh - 190px); }
 
-.proposal { background: var(--card); border-radius: 8px; padding: 10px; margin: 8px 0; }
-.proposal header { display: flex; gap: 8px; align-items: center; color: var(--accent); font-weight: 600; }
-.proposal .reason { color: var(--muted); font-size: 13px; margin: 4px 0; }
 .call-item { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .call-item .title { flex: 1; cursor: pointer; }
 .call-item .title:hover { text-decoration: underline; }
@@ -115,4 +99,11 @@ body.pip .transcript { max-height: 30vh; }
 
 .bridge-state.ok { color: var(--ok); }
 .bridge-state.error { color: var(--danger); }
-#bridge-connector { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }
+.connector { font-family: Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }
+.row .connector { flex: 1; min-width: 220px; width: auto; }
+
+/* Claude connection, at the top of the Call tab */
+.claude-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.claude-head { display: flex; align-items: center; gap: 8px; }
+.claude-box .hint { margin: 6px 0 0; }
+.live-hint { margin: 10px 0 4px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--card); font-size: 14px; }

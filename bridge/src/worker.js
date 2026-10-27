@@ -5,7 +5,9 @@
 //   POST /api/<key>/call     the page saves the current call (JSON sent as text/plain)
 //   GET  /api/<key>/status   the page checks the bridge
 //   POST /api/<key>/delete   the page deletes every call kept for this key
-//   POST /mcp/<key>          MCP: Claude reads the calls
+//   POST /mcp/<key>          MCP: Claude reads the calls (tools, and ready-made prompts)
+//   GET  /health             "running"
+//   everything else          the web app itself, when deployed with it (static assets bound as ASSETS)
 //
 // <key> is a long random secret made by the page. Whoever knows the address
 // can read the calls, so it lives only in the page's settings and in the
@@ -73,6 +75,46 @@ const TOOLS = [
       required: ["id"],
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+];
+
+// Ready-made requests the user picks in claude.ai. They carry the transcript
+// themselves, so Claude answers at once, with no tool call to approve.
+const PROMPTS = [
+  {
+    name: "cosa_dico_adesso",
+    title: "Cosa dico adesso?",
+    description: "Legge gli ultimi minuti della chiamata in corso e propone cosa dire ora. (What should I say now?)",
+    minutes: 10,
+    request:
+      "Sono in una chiamata adesso. Qui sotto c'è la trascrizione automatica degli ultimi minuti. Usa anche quello che sai di me.\n" +
+      "Rispondi brevissimo, lo leggo mentre parlo:\n" +
+      "1. Di cosa si parla, in una riga.\n" +
+      "2. Fino a 3 cose che potrei dire adesso (domande da fare o risposte), pronte da dire ad alta voce, nella lingua della chiamata.\n" +
+      "3. Cose da ricordare (nomi, date, numeri, impegni), se ce ne sono.\n" +
+      "Quando ti richiedo un aggiornamento, rileggi la chiamata con lo strumento get_current_call.",
+  },
+  {
+    name: "cosa_mi_hanno_chiesto",
+    title: "Cosa mi hanno chiesto?",
+    description: "Trova le domande e le richieste degli ultimi minuti, con una risposta per ognuna. (What did they just ask me?)",
+    minutes: 5,
+    request:
+      "Sono in una chiamata adesso. Dalla trascrizione qui sotto, elenca le domande o le richieste che mi hanno fatto negli ultimi minuti. " +
+      "Per ognuna scrivi una risposta breve che posso dire ad alta voce, nella lingua della chiamata. Usa anche quello che sai di me.",
+  },
+  {
+    name: "riassunto_chiamata",
+    title: "Riassumi la chiamata",
+    description: "Legge tutta l'ultima chiamata e scrive riassunto, punti chiave e cose da fare. (Summarize the call)",
+    minutes: 0,
+    request:
+      "Qui sotto c'è la trascrizione della mia ultima chiamata. Usa anche quello che sai di me e scrivi:\n" +
+      "1. Un titolo breve.\n" +
+      "2. Il riassunto, in 5-10 righe.\n" +
+      "3. I punti chiave.\n" +
+      "4. Le cose da fare: chi, cosa, entro quando.\n" +
+      "5. Cosa vale la pena ricordare di me e delle persone della chiamata per le prossime volte.",
   },
 ];
 
@@ -178,15 +220,16 @@ function lengthOf(call) {
 }
 
 /** The call as text for Claude: a short header, then "[mm:ss] Me: ..." lines. */
-export function describeCall(call, minutes, now) {
+export function describeCall(call, minutes, now, app = "") {
   const end = lengthOf(call);
   const shown = minutes > 0 ? call.lines.filter((l) => l.t >= end - minutes * 60) : call.lines;
   const ago = Math.max(0, Math.round((now - call.updatedAt) / 1000));
+  const startHint = app ? ` To follow a new call, the user opens the Call Assistant at ${app} and presses Start.` : "";
   const out = [`Call ${call.id}, started ${call.startedAt} (UTC), ${fmtTime(end)} of transcript so far.`];
-  if (call.status === "ended") out.push("Status: ended.");
+  if (call.status === "ended") out.push(`Status: ended.${startHint}`);
   else {
     out.push(`Status: in progress. The page last sent an update ${ago} seconds ago.`);
-    if (ago > STALE_S) out.push("The page hasn't sent anything for a while: it may have been closed, or the call may be over.");
+    if (ago > STALE_S) out.push(`The page hasn't sent anything for a while: it may have been closed, or the call may be over.${startHint}`);
   }
   out.push(`Call language setting: ${call.lang}.`);
   if (!call.lines.length) out.push("Nothing has been transcribed yet.");
@@ -200,8 +243,8 @@ export function describeCall(call, minutes, now) {
   return out.join("\n");
 }
 
-function describeList(calls, now) {
-  if (!calls.length) return NO_CALLS;
+function describeList(calls, now, app) {
+  if (!calls.length) return noCalls(app);
   return calls
     .map((c) => {
       const status = c.status === "ended" ? "ended" : `in progress, updated ${Math.round((now - c.updatedAt) / 1000)} s ago`;
@@ -211,9 +254,12 @@ function describeList(calls, now) {
     .join("\n");
 }
 
-const NO_CALLS =
-  "No calls yet. In the Call Assistant page, connect the bridge under Settings and start a call: " +
-  "its transcript appears here within a few seconds.";
+function noCalls(app) {
+  return app
+    ? `No calls yet. The user opens the Call Assistant at ${app} and presses Start: the transcript appears here within a few seconds. Give them this link.`
+    : "No calls yet. In the Call Assistant page, connect the bridge under Settings and start a call: " +
+        "its transcript appears here within a few seconds.";
+}
 
 // ---------------------------------------------------------------------- MCP
 
@@ -226,22 +272,35 @@ function minutesArg(value, fallback) {
   return Number.isFinite(n) && n >= 0 ? Math.min(n, 24 * 60) : fallback;
 }
 
-async function callTool(name, args, db, room, now) {
+async function callTool(name, args, ctx) {
+  const { db, room, now, app } = ctx;
   const calls = await loadCalls(db, room, now);
   if (name === "get_current_call") {
-    if (!calls.length) return toolText(NO_CALLS);
-    return toolText(describeCall(calls[0], minutesArg(args.minutes, 10), now));
+    if (!calls.length) return toolText(noCalls(app));
+    return toolText(describeCall(calls[0], minutesArg(args.minutes, 10), now, app));
   }
-  if (name === "list_calls") return toolText(describeList(calls, now));
+  if (name === "list_calls") return toolText(describeList(calls, now, app));
   if (name === "get_call") {
     const call = calls.find((c) => c.id === String(args.id || ""));
     if (!call) return toolText(`No call with id "${args.id}". Use list_calls to see the ids.`, true);
-    return toolText(describeCall(call, minutesArg(args.minutes, 0), now));
+    return toolText(describeCall(call, minutesArg(args.minutes, 0), now, app));
   }
   return null;
 }
 
-async function handleRpc(msg, db, room, now) {
+async function getPrompt(name, ctx) {
+  const prompt = PROMPTS.find((p) => p.name === name);
+  if (!prompt) return null;
+  const { db, room, now, app } = ctx;
+  const [call] = await loadCalls(db, room, now);
+  const transcript = call ? describeCall(call, prompt.minutes, now, app) : noCalls(app);
+  return {
+    description: prompt.description,
+    messages: [{ role: "user", content: { type: "text", text: `${prompt.request}\n\n<call>\n${transcript}\n</call>` } }],
+  };
+}
+
+async function handleRpc(msg, ctx) {
   if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
     // A response from the client, or something that isn't JSON-RPC: nothing to answer.
     return msg && "id" in msg && !("result" in msg) && !("error" in msg) ? rpcError(msg.id ?? null, -32600, "Invalid request") : null;
@@ -257,11 +316,12 @@ async function handleRpc(msg, db, room, now) {
         id,
         result: {
           protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
-          capabilities: { tools: { listChanged: false } },
+          capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
           serverInfo: SERVER_INFO,
           instructions:
             "Live transcript of the user's calls, sent by their Call Assistant web page. " +
-            "Whenever the user asks about the call they are in, call get_current_call again to read the latest lines.",
+            "Whenever the user asks about the call they are in, call get_current_call again to read the latest lines." +
+            (ctx.app ? ` The Call Assistant page is at ${ctx.app}: the user opens it and presses Start to follow a call.` : ""),
         },
       };
     }
@@ -270,8 +330,18 @@ async function handleRpc(msg, db, room, now) {
     case "tools/list":
       return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
     case "tools/call": {
-      const result = await callTool(params.name, params.arguments || {}, db, room, now);
+      const result = await callTool(params.name, params.arguments || {}, ctx);
       return result ? { jsonrpc: "2.0", id, result } : rpcError(id, -32602, `Unknown tool: ${params.name}`);
+    }
+    case "prompts/list":
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: { prompts: PROMPTS.map(({ name, title, description }) => ({ name, title, description, arguments: [] })) },
+      };
+    case "prompts/get": {
+      const result = await getPrompt(params.name, ctx);
+      return result ? { jsonrpc: "2.0", id, result } : rpcError(id, -32602, `Unknown prompt: ${params.name}`);
     }
     default:
       return rpcError(id, -32601, `Method not found: ${method}`);
@@ -291,12 +361,11 @@ async function mcp(request, env, key) {
   }
   const db = env.DB;
   await ready(db);
-  const room = await roomOf(key);
-  const now = Date.now();
+  const ctx = { db, room: await roomOf(key), now: Date.now(), app: appLink(request, env) };
   const messages = Array.isArray(body) ? body : [body];
   const replies = [];
   for (const msg of messages) {
-    const reply = await handleRpc(msg, db, room, now);
+    const reply = await handleRpc(msg, ctx);
     if (reply) replies.push(reply);
   }
   if (!replies.length) return new Response(null, { status: 202, headers: CORS });
@@ -344,24 +413,38 @@ function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...CORS, "content-type": "application/json" } });
 }
 
+/** Where the web app is, when this Worker also serves it. */
+function appLink(request, env) {
+  return env.ASSETS ? `${new URL(request.url).origin}/` : "";
+}
+
+function health(env) {
+  return new Response(
+    env.DB
+      ? "Call Assistant bridge: running." + (env.ASSETS ? " The app is at /." : " Connect it from the web app's Settings.")
+      : "Call Assistant bridge: running, but no database. Bind a D1 database as DB (see the README).",
+    { headers: { "content-type": "text/plain; charset=utf-8" } },
+  );
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-    const parts = new URL(request.url).pathname.split("/").filter(Boolean);
+    const url = new URL(request.url);
+    const parts = url.pathname.split("/").filter(Boolean);
     try {
-      if (!parts.length && request.method === "GET") {
-        return new Response(
-          env.DB
-            ? "Call Assistant bridge: running. Connect it from the web app's Settings."
-            : "Call Assistant bridge: running, but no database. Bind a D1 database as DB (see the README).",
-          { headers: { "content-type": "text/plain; charset=utf-8" } },
-        );
-      }
       if (parts[0] === "mcp" && parts.length === 2 && KEY.test(parts[1])) {
         if (!env.DB) return json(rpcError(null, -32603, "The bridge has no database: bind a D1 database as DB."), 500);
         return await mcp(request, env, parts[1]);
       }
       if (parts[0] === "api" && parts.length === 3 && KEY.test(parts[1])) return await api(request, env, parts[1], parts[2]);
+      if (parts[0] === "health" && parts.length === 1) return health(env);
+      if (env.ASSETS) {
+        // The app used to live under /web/ (the repository's layout): keep old links working.
+        if (parts[0] === "web") return Response.redirect(`${url.origin}/${parts.slice(1).join("/")}${url.search}`, 301);
+        return env.ASSETS.fetch(request);
+      }
+      if (!parts.length && request.method === "GET") return health(env);
       return json({ ok: false, error: "not_found" }, 404);
     } catch (err) {
       console.error(err);
