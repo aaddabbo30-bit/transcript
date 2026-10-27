@@ -1,11 +1,17 @@
 // Deploying this repository to Cloudflare as it is (Workers & Pages → Import a
-// repository) publishes the Claude bridge from bridge/, not the files of the
-// repository. Same Worker as bridge/wrangler.jsonc, which the Deploy button uses.
+// repository) publishes the Call Assistant at one address: the web app from
+// web/, and the bridge to Claude (bridge/src/worker.js) under /api and /mcp.
+// The page finds its bridge by itself, since it's at the same address.
 {
   "$schema": "https://unpkg.com/wrangler@4.149.0/config-schema.json",
   "name": "call-assistant-bridge",
   "main": "bridge/src/worker.js",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
+  "assets": {
+    "directory": "web",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/mcp/*", "/health", "/web/*"]
+  },
   "d1_databases": [{ "binding": "DB", "database_name": "call-assistant-bridge" }]
 }

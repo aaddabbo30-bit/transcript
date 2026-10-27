@@ -16,7 +16,6 @@ links below.
 | [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) | Claude API client | Apache-2.0 |
 | [NumPy](https://numpy.org) | audio processing | BSD-3-Clause |
 | Python, Tcl/Tk | runtime and window toolkit | PSF License, Tcl/Tk license (BSD-style) |
-| [Anthropic TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript) 0.137.0 | Claude API client of the web app, bundled in `web/vendor/anthropic-sdk.mjs` (license in `web/vendor/LICENSE-anthropic-sdk.txt`) | MIT |
 | [Transformers.js](https://github.com/huggingface/transformers.js) 4.3.1 | Whisper in the browser (web app), loaded from jsDelivr | Apache-2.0 |
 | [onnx-community/whisper-base / whisper-small](https://huggingface.co/onnx-community/whisper-base) | Whisper models for the web app, downloaded by the browser | MIT |
 

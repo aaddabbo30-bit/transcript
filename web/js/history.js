@@ -1,4 +1,4 @@
-// Past calls, kept in this browser, and the Markdown renderings for download.
+// Past calls, kept in this browser, and their transcript as Markdown for download.
 
 import { fmtTime } from "./transcript.js";
 
@@ -47,27 +47,19 @@ export function deleteCall(id) {
   }
 }
 
-export function summaryMarkdown(call, t) {
-  const d = call.data || {};
-  const started = new Date(call.startedAt);
-  const title = d.title || `${t("summary_title")} ${started.toLocaleString()}`;
-  const out = [`# ${title}`, "", `${started.toLocaleString()} · ${fmtTime(call.durationS)} · $${(call.cost || 0).toFixed(4)}`, ""];
-  if (call.error) out.push(`> ${t("summary_failed", { error: call.error })}`, "");
-  if (d.summary) out.push(String(d.summary).trim(), "");
-  if (d.key_points && d.key_points.length) out.push(`## ${t("key_points")}`, "", ...d.key_points.map((p) => `- ${p}`), "");
-  if (d.action_items && d.action_items.length) {
-    out.push(`## ${t("actions")}`, "");
-    for (const a of d.action_items) out.push(`- [ ] **${a.owner}:** ${a.task}${a.due ? ` (${t("due")} ${a.due})` : ""}`);
-    out.push("");
-  }
-  if (call.liveRemember && call.liveRemember.length) out.push(`## ${t("notes_live")}`, "", ...call.liveRemember.map((r) => `- ${r}`), "");
-  return out.join("\n");
+/** "27/10/2026, 09:00:00 · 12:30": when the call started and how long it lasted. */
+export function callLabel(call) {
+  return `${new Date(call.startedAt).toLocaleString()} · ${fmtTime(call.durationS)}`;
 }
 
 export function transcriptMarkdown(call, t) {
   const labels = { me: t("speaker_me"), them: t("speaker_them") };
   const lines = (call.transcript || []).map((l) => `- [${fmtTime(l.t)}] **${labels[l.speaker] || l.speaker}:** ${l.text}`);
-  return `# ${t("sec_transcript")}\n\n${lines.join("\n")}\n`;
+  return `# ${t("transcript_title")}\n\n${callLabel(call)}\n\n${lines.join("\n")}\n`;
+}
+
+export function fileName(call, what) {
+  return `${call.id.slice(0, 16).replace(/[:T]/g, "-")}-${what}.md`;
 }
 
 export function download(filename, text) {

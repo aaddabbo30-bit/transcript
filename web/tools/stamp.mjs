@@ -8,7 +8,7 @@
 //   node web/tools/stamp.mjs --check  fail if web/index.html is out of date (CI)
 
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const WEB = fileURLToPath(new URL("../", import.meta.url));
@@ -17,7 +17,7 @@ const START = "<!-- stamp:start -->";
 const END = "<!-- stamp:end -->";
 
 const files = (dir, test) =>
-  readdirSync(WEB + dir)
+  (existsSync(WEB + dir) ? readdirSync(WEB + dir) : [])
     .filter((f) => test.test(f))
     .sort()
     .map((f) => `${dir}/${f}`);

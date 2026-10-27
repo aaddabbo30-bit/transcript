@@ -4,12 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Assistente chiamate</title>
-  <meta name="description" content="Assistente personale per chiamate e video: trascrizione nel browser con Whisper e suggerimenti live da Claude.">
+  <meta name="description" content="Assistente per chiamate e video: trascrive nel browser con Whisper e Claude legge la chiamata dalla tua chat.">
   <link rel="icon" href="assets/icon.png">
   <!-- stamp:start -->
-  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=b57d1db2b7","./js/audio-worklet.js":"./js/audio-worklet.js?v=b57d1db2b7","./js/audio.js":"./js/audio.js?v=b57d1db2b7","./js/bridge.js":"./js/bridge.js?v=b57d1db2b7","./js/claude.js":"./js/claude.js?v=b57d1db2b7","./js/history.js":"./js/history.js?v=b57d1db2b7","./js/i18n.js":"./js/i18n.js?v=b57d1db2b7","./js/memory.js":"./js/memory.js?v=b57d1db2b7","./js/model-files.js":"./js/model-files.js?v=b57d1db2b7","./js/prompts.js":"./js/prompts.js?v=b57d1db2b7","./js/segmenter.js":"./js/segmenter.js?v=b57d1db2b7","./js/session.js":"./js/session.js?v=b57d1db2b7","./js/transcriber.js":"./js/transcriber.js?v=b57d1db2b7","./js/transcript.js":"./js/transcript.js?v=b57d1db2b7","./js/whisper-worker.js":"./js/whisper-worker.js?v=b57d1db2b7","./vendor/anthropic-sdk.mjs":"./vendor/anthropic-sdk.mjs?v=b57d1db2b7"}}</script>
-  <link rel="stylesheet" href="css/app.css?v=b57d1db2b7">
-  <script type="module" src="js/app.js?v=b57d1db2b7"></script>
+  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=7ad1c9de98","./js/audio-worklet.js":"./js/audio-worklet.js?v=7ad1c9de98","./js/audio.js":"./js/audio.js?v=7ad1c9de98","./js/bridge.js":"./js/bridge.js?v=7ad1c9de98","./js/history.js":"./js/history.js?v=7ad1c9de98","./js/i18n.js":"./js/i18n.js?v=7ad1c9de98","./js/model-files.js":"./js/model-files.js?v=7ad1c9de98","./js/prompts.js":"./js/prompts.js?v=7ad1c9de98","./js/segmenter.js":"./js/segmenter.js?v=7ad1c9de98","./js/session.js":"./js/session.js?v=7ad1c9de98","./js/transcriber.js":"./js/transcriber.js?v=7ad1c9de98","./js/transcript.js":"./js/transcript.js?v=7ad1c9de98","./js/whisper-worker.js":"./js/whisper-worker.js?v=7ad1c9de98"}}</script>
+  <link rel="stylesheet" href="css/app.css?v=7ad1c9de98">
+  <script type="module" src="js/app.js?v=7ad1c9de98"></script>
   <!-- stamp:end -->
 </head>
 <body>
@@ -18,7 +18,6 @@
     <h1 data-t="app_title">Assistente chiamate</h1>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="call" class="active" data-t="tab_call">Chiamata</button>
-      <button role="tab" data-tab="memory" data-t="tab_memory">Memoria</button>
       <button role="tab" data-tab="history" data-t="tab_history">Archivio</button>
       <button role="tab" data-tab="settings" data-t="tab_settings">Impostazioni</button>
     </nav>
@@ -28,7 +27,17 @@
     <!-- CALL -->
     <section id="tab-call" class="tab active">
       <div id="setup" class="card">
-        <p id="key-missing" class="notice warn hidden"></p>
+        <div id="claude-box" class="claude-box">
+          <div class="claude-head"><span id="claude-dot" class="dot"></span><strong id="claude-title"></strong></div>
+          <p id="claude-text" class="hint"></p>
+          <div id="claude-connector-row" class="row hidden">
+            <input id="setup-connector" class="connector" type="text" readonly aria-label="connector">
+            <button id="setup-copy" data-t="bridge_copy"></button>
+            <button id="setup-done" class="ghost" data-t="claude_done"></button>
+          </div>
+          <div id="claude-settings-row" class="row hidden"><button id="go-settings" data-t="claude_go_settings"></button></div>
+        </div>
+        <p id="setup-notice" class="notice hidden"></p>
         <label class="field">
           <span data-t="language">Lingua della chiamata</span>
           <select id="call-language">
@@ -56,7 +65,6 @@
           <strong id="status">Pronto</strong>
           <span id="timer" class="muted">00:00</span>
           <span class="spacer"></span>
-          <span id="cost" class="muted small" title="">$0.0000</span>
           <button id="pip" class="ghost small" data-t="btn_pip">⧉</button>
           <button id="stop" class="danger" data-t="btn_stop">■ Stop</button>
         </div>
@@ -72,65 +80,21 @@
           <button id="ask-claude" class="ask" data-t="btn_ask_claude"></button>
         </div>
         <p id="notice" class="notice hidden"></p>
-        <div class="section-head"><span data-t="sec_topic"></span><span class="spacer"></span><span id="countdown" class="muted small"></span><button id="refresh" class="icon" data-t="btn_refresh">↻</button></div>
-        <p id="topic" class="topic"></p>
-        <div class="section-head"><span data-t="sec_suggestions"></span><span class="spacer"></span><span class="faint small" data-t="click_to_copy"></span></div>
-        <div id="suggestions"></div>
-        <div class="section-head"><span data-t="sec_remember"></span></div>
-        <ul id="remember" class="remember"></ul>
+        <p id="live-hint" class="live-hint"></p>
         <div class="section-head"><span data-t="sec_transcript"></span></div>
         <div id="transcript" class="transcript" aria-live="off"></div>
       </div>
 
-      <div id="summary" class="card hidden">
-        <h2 id="summary-title"></h2>
-        <p id="summary-meta" class="muted small"></p>
-        <p id="summary-error" class="notice warn hidden"></p>
-        <div id="summary-body" class="prewrap"></div>
-        <div id="summary-lists"></div>
+      <div id="ended" class="card hidden">
+        <h2 data-t="ended_title"></h2>
+        <p id="ended-meta" class="muted small"></p>
+        <p id="ended-hint" class="hint"></p>
         <div class="row">
-          <button id="dl-summary" data-t="download_summary"></button>
-          <button id="dl-transcript" data-t="download_transcript"></button>
           <button id="summary-claude" class="ask" data-t="btn_summary_claude"></button>
+          <button id="dl-transcript" data-t="download_transcript"></button>
           <button id="new-call" class="primary" data-t="btn_new_call"></button>
         </div>
         <p id="summary-claude-status" class="notice hidden"></p>
-        <div id="review" class="hidden">
-          <h3 data-t="review_title"></h3>
-          <p class="hint" data-t="review_text"></p>
-          <div id="proposals"></div>
-          <div class="row"><button id="apply-proposals" class="primary" data-t="review_apply"></button><span id="review-status" class="muted small"></span></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- MEMORY -->
-    <section id="tab-memory" class="tab">
-      <div class="card">
-        <p class="hint" data-t="mem_where"></p>
-        <div class="row">
-          <label class="field grow"><span data-t="mem_files"></span><select id="mem-file"></select></label>
-          <button id="mem-new" data-t="mem_new"></button>
-          <button id="mem-delete" class="ghost" data-t="mem_delete"></button>
-        </div>
-        <textarea id="mem-text" rows="14" spellcheck="true"></textarea>
-        <div class="row"><button id="mem-save" class="primary" data-t="mem_save"></button><span id="mem-status" class="muted small"></span></div>
-      </div>
-      <div class="card">
-        <h3 data-t="mem_import_title"></h3>
-        <p class="hint" data-t="mem_import_text"></p>
-        <blockquote id="import-prompt" class="prompt"></blockquote>
-        <button id="copy-prompt" data-t="copy_prompt"></button>
-        <textarea id="import-text" rows="8"></textarea>
-        <div class="row"><button id="import-save" class="primary" data-t="import_save"></button><span id="import-status" class="muted small"></span></div>
-      </div>
-      <div class="card">
-        <h3 data-t="mem_backup"></h3>
-        <div class="row">
-          <button id="mem-export" data-t="mem_export"></button>
-          <label class="button"><span data-t="mem_import_backup"></span><input id="mem-import-file" type="file" accept=".md,text/markdown,text/plain" hidden></label>
-          <span id="backup-status" class="muted small"></span>
-        </div>
       </div>
     </section>
 
@@ -142,20 +106,21 @@
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab">
       <div class="card">
-        <label class="field"><span data-t="settings_key"></span><input id="api-key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
-        <p class="hint" data-t="settings_key_hint"></p>
-        <div class="row"><button id="key-save" class="primary" data-t="settings_key_save"></button><button id="key-forget" class="ghost" data-t="settings_key_forget"></button><span id="key-status" class="muted small"></span></div>
-      </div>
-      <div class="card">
         <h3 data-t="bridge_title"></h3>
-        <p class="hint"><span data-t="bridge_text"></span> <a id="bridge-howto" href="https://github.com/aaddabbo30-bit/transcript#connect-claude-directly-no-api-key" target="_blank" rel="noopener" data-t="bridge_howto"></a></p>
-        <label class="field"><span data-t="bridge_url"></span><input id="bridge-url" type="url" placeholder="https://call-assistant-bridge.…workers.dev"></label>
-        <div class="row"><button id="bridge-connect" class="primary" data-t="bridge_connect"></button><button id="bridge-off" class="ghost" data-t="bridge_off"></button><span id="bridge-status" class="muted small"></span></div>
+        <p class="hint"><span data-t="bridge_text"></span> <a id="bridge-howto" href="https://github.com/aaddabbo30-bit/transcript#set-it-up-once" target="_blank" rel="noopener" data-t="bridge_howto"></a></p>
+        <div id="bridge-manual">
+          <label class="field"><span data-t="bridge_url"></span><input id="bridge-url" type="url" placeholder="https://….workers.dev"></label>
+          <div class="row"><button id="bridge-connect" class="primary" data-t="bridge_connect"></button><button id="bridge-off" class="ghost" data-t="bridge_off"></button></div>
+        </div>
+        <p id="bridge-here" class="hint hidden" data-t="bridge_here"></p>
         <div id="bridge-connector-box" class="hidden">
-          <label class="field"><span data-t="bridge_connector"></span><input id="bridge-connector" type="text" readonly></label>
+          <label class="field"><span data-t="bridge_connector"></span><input id="bridge-connector" class="connector" type="text" readonly></label>
           <p class="hint" data-t="bridge_connector_hint"></p>
           <div class="row"><button id="bridge-copy" data-t="bridge_copy"></button><button id="bridge-clear" class="ghost" data-t="bridge_clear"></button><button id="bridge-new-key" class="ghost" data-t="bridge_new_key"></button></div>
         </div>
+        <p id="bridge-status" class="muted small"></p>
+        <label class="field"><span data-t="settings_claude_url"></span><input id="claude-url" type="url" placeholder="https://claude.ai/new"></label>
+        <p class="hint"><span data-t="settings_claude_url_hint"></span> <span id="claude-url-status" class="muted small"></span></p>
       </div>
       <div class="card">
         <label class="field"><span data-t="settings_whisper"></span>
@@ -171,19 +136,10 @@
             <span id="manual-status" class="muted small"></span>
           </div>
         </div>
-        <label class="field"><span data-t="settings_interval"></span><input id="interval" type="number" min="10" max="120" step="5"></label>
-        <label class="field"><span data-t="settings_summary_model"></span>
-          <select id="summary-model">
-            <option value="claude-opus-5-5">Claude Opus 5.5</option>
-            <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
-          </select>
-        </label>
-        <label class="field"><span data-t="settings_claude_url"></span><input id="claude-url" type="url" placeholder="https://claude.ai/new"></label>
-        <p class="hint" data-t="settings_claude_url_hint"></p>
         <label class="field"><span data-t="settings_ui"></span>
           <select id="ui-language"><option value="it">Italiano</option><option value="en">English</option></select>
         </label>
-        <div class="row"><button id="settings-save" class="primary" data-t="mem_save"></button><span id="settings-status" class="muted small"></span></div>
+        <div class="row"><button id="settings-save" class="primary" data-t="settings_save"></button><span id="settings-status" class="muted small"></span></div>
       </div>
     </section>
   </main>

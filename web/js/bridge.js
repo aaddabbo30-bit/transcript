@@ -16,6 +16,23 @@ export function newBridgeKey() {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * The bridge at the page's own address, when the page is served by it (the
+ * repository deployed to Cloudflare as it is). null elsewhere, e.g. GitHub
+ * Pages; a bridge there without its database throws BridgeError("no_database").
+ */
+export async function sameOriginBridge(key, { origin = location.origin, fetchImpl, timeoutMs = 5000 } = {}) {
+  if (!/^https:|^http:\/\/(localhost|127\.0\.0\.1)[:/]/.test(`${origin}/`)) return null;
+  const bridge = new Bridge({ url: origin, key, fetchImpl, timeoutMs });
+  try {
+    await bridge.status();
+    return bridge;
+  } catch (err) {
+    if (err instanceof BridgeError && err.code === "no_database") throw err;
+    return null;
+  }
+}
+
 /** The bridge address as typed ("" when empty, null when it isn't a web address). */
 export function cleanBridgeUrl(value) {
   const text = String(value || "").trim();
@@ -100,7 +117,7 @@ export class BridgeSync {
     this.tick();
   }
 
-  snapshot(status, summary = "") {
+  snapshot(status) {
     const s = this.session;
     return {
       id: s.startedAt.toISOString(),
@@ -108,8 +125,6 @@ export class BridgeSync {
       status,
       lang: s.language,
       lines: s.store.lines.map(({ t, speaker, text }) => ({ t, speaker, text })),
-      remember: (s.lastInsight && s.lastInsight.remember) || [],
-      summary,
     };
   }
 
@@ -141,11 +156,11 @@ export class BridgeSync {
     return this.busy;
   }
 
-  /** The call is over: one last send, marked as ended, with the summary if there is one. */
-  async finish(summary = "") {
+  /** The call is over: one last send, marked as ended. */
+  async finish() {
     clearInterval(this.timer);
     if (this.busy) await this.busy;
-    await this.push(this.snapshot("ended", summary), "ended");
+    await this.push(this.snapshot("ended"), "ended");
   }
 
   stop() {

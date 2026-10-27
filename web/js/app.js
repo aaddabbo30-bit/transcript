@@ -1,11 +1,11 @@
-// The page: tabs, the live call panel, summary, memory, history and settings.
+// The page: the call (setup, live panel, end of the call), history and settings.
+// Claude reads the call from the user's bridge (bridge.js) as a connector on
+// claude.ai; without a bridge, «Ask Claude» copies the transcript for the chat.
 
 import { BrowserAudioCapture, CaptureError, captureSupported } from "./audio.js";
-import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey } from "./bridge.js";
-import { ClaudeClient, FakeClaude } from "./claude.js";
-import { download, deleteCall, loadCalls, saveCall, summaryMarkdown, transcriptMarkdown } from "./history.js";
+import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "./bridge.js";
+import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
-import { Memory, MemoryPathError } from "./memory.js";
 import { BIG_FILES, ModelFileError, hasManualModel, importModelFiles, manualDownloadLinks } from "./model-files.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt } from "./prompts.js";
 import { CallSession, TranscriptReplay } from "./session.js";
@@ -15,24 +15,19 @@ import { fmtTime, parseTranscript } from "./transcript.js";
 // The live panel can be in the always-on-top window (see openPip), outside this document.
 const $ = (id) => document.getElementById(id) || (pipWindow && pipWindow.document.getElementById(id));
 const params = new URLSearchParams(location.search);
-// Test hooks: ?engine=scripted (no Whisper download), ?llm=fake (no API key), ?speed=N (demo speed).
+// Test hooks: ?engine=scripted (no Whisper download), ?speed=N (demo speed).
 const TEST_ENGINE = params.get("engine");
-const TEST_LLM = params.get("llm");
 
 const SETTINGS_KEY = "ca.settings.v1";
-const API_KEY = "ca.apiKey";
 const DEFAULTS = {
   uiLanguage: (navigator.language || "it").toLowerCase().startsWith("it") ? "it" : "en",
   callLanguage: "auto",
   whisperModel: "base",
-  insightInterval: 25,
-  insightModel: "claude-haiku-5-5",
-  summaryModel: "claude-opus-5-5",
-  transcriptWindow: 240,
   claudeUrl: "", // chat that «Ask Claude» opens; "" = a new chat
-  bridgeUrl: "", // the user's bridge to Claude (bridge/), e.g. https://call-assistant-bridge.x.workers.dev
+  bridgeUrl: "", // the user's bridge to Claude (bridge/): the page's own address when it serves the page
   bridgeKey: "", // secret part of the bridge addresses, made on first use
   bridgeOn: false,
+  connectorAdded: false, // the user added the connector on claude.ai: the Call tab stops showing that step
 };
 const CLAUDE_NEW_CHAT = "https://claude.ai/new";
 
@@ -57,24 +52,22 @@ function saveSettings() {
     /* storage blocked: settings last for this visit */
   }
 }
-function getApiKey() {
-  try {
-    return store()?.getItem(API_KEY) || "";
-  } catch {
-    return "";
-  }
+// Earlier versions called the Claude API with a key saved here: it isn't used any more.
+try {
+  store()?.removeItem("ca.apiKey");
+} catch {
+  /* nothing saved */
 }
 
 let settings = loadSettings();
 let t = translator(settings.uiLanguage);
-let memory = new Memory(settings.uiLanguage);
 let session = null;
 let lastResult = null;
-let copiedUntil = 0;
 let pipWindow = null;
 let claudeOpened = false; // the Claude chat was opened from this page
-let notesSentTo = null; // the session whose first «Ask Claude» carried the personal notes
 let bridgeSync = null; // sends the running call to the bridge
+let bridgeHere = false; // the page is served by its bridge, so it is connected by itself
+let bridgeProblem = ""; // why the bridge at this address can't be used
 
 // ------------------------------------------------------------------ helpers
 function applyTranslations() {
@@ -83,8 +76,6 @@ function applyTranslations() {
   document.querySelectorAll("[data-t]").forEach((el) => {
     el.textContent = t(el.dataset.t);
   });
-  $("refresh").title = t("tip_refresh");
-  $("import-prompt").textContent = t("import_prompt");
 }
 
 function show(el, visible = true) {
@@ -121,34 +112,57 @@ async function copyText(text, view = window) {
 function showTab(name) {
   document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${name}`));
-  if (name === "memory") renderMemory();
   if (name === "history") renderHistory();
   if (name === "settings") renderSettings();
 }
 
+// ------------------------------------------------------------- Claude box
+/** At the top of the Call tab: is Claude reading the calls, and what is left to do. */
+function renderClaudeBox(checking = false) {
+  let dot = "";
+  let title;
+  let text = "";
+  let connectorStep = false;
+  if (checking) {
+    dot = "busy";
+    title = t("claude_checking");
+  } else if (bridgeProblem) {
+    dot = "error";
+    title = t("claude_off_title");
+    text = bridgeProblem;
+  } else if (bridgeActive() && !settings.connectorAdded) {
+    dot = "warn";
+    title = t("claude_last_step");
+    text = t("claude_last_step_text");
+    connectorStep = true;
+  } else if (bridgeActive()) {
+    dot = "ok";
+    title = t("claude_on_title");
+    text = t("claude_on_text");
+  } else {
+    title = t("claude_off_title");
+    text = t("claude_off_text");
+  }
+  $("claude-dot").className = `dot ${dot}`;
+  $("claude-title").textContent = title;
+  $("claude-text").textContent = text;
+  $("setup-connector").value = connectorStep ? makeBridge().connectorUrl : "";
+  show($("claude-connector-row"), connectorStep);
+  show($("claude-settings-row"), !checking && !bridgeActive() && !bridgeHere);
+}
+
 // --------------------------------------------------------------- the call
 function renderSetup() {
-  const missing = !getApiKey() && TEST_LLM !== "fake";
-  setNotice($("key-missing"), missing ? t("no_api_key") : "", "warn");
   $("call-language").value = settings.callLanguage;
-  if (!captureSupported()) setNotice($("key-missing"), t("unsupported"), "error");
+  setNotice($("setup-notice"), captureSupported() ? "" : t("unsupported"), "error");
+  renderClaudeBox();
 }
 
 function resetLive() {
   $("transcript").innerHTML = "";
-  $("suggestions").innerHTML = "";
-  $("remember").innerHTML = "";
-  const waiting = bridgeActive() ? "waiting_connector" : "waiting_chat";
-  $("topic").textContent = session && session.insightsDisabled ? t(waiting) : t("waiting_more");
+  $("live-hint").textContent = bridgeActive() ? t("live_hint_connector") : t("live_hint_copy");
   setBridgeState(null);
-  $("topic").className = "topic waiting";
-  $("cost").textContent = "$0.0000";
-  // Without an API key there are no automatic suggestions, nor costs.
-  const chatOnly = Boolean(session && session.insightsDisabled);
-  show($("cost"), !chatOnly);
-  show($("refresh"), !chatOnly);
   $("timer").textContent = "00:00";
-  $("countdown").textContent = "";
   setNotice($("notice"), "");
   $("live-language").value = settings.callLanguage;
   $("stop").disabled = false;
@@ -159,20 +173,12 @@ function setStatus(state) {
     loading: ["status_loading", "warn"],
     listening: ["status_listening", "ok"],
     stopping: ["status_stopping", "busy"],
-    summarizing: ["status_summarizing", "busy"],
     done: ["status_done", ""],
     error: ["status_error", "error"],
   };
   const [key, cls] = map[state] || ["status_ready", ""];
   $("status").textContent = t(key);
   $("status-dot").className = `dot ${cls}`;
-}
-
-function makeLLM(demo) {
-  const key = getApiKey();
-  if (TEST_LLM === "fake") return new FakeClaude();
-  if (key) return new ClaudeClient(key);
-  return demo ? new FakeClaude() : null;
 }
 
 async function startCall({ demo = false } = {}) {
@@ -201,9 +207,9 @@ async function startCall({ demo = false } = {}) {
             onProgress: (p) => setNotice($("notice"), t("model_progress", { p }), ""),
           });
   }
-  session = new CallSession({ settings, memory, llm: makeLLM(demo), transcriber, capture, replay, onEvent: handleEvent });
+  session = new CallSession({ settings, transcriber, capture, replay, onEvent: handleEvent });
   show($("setup"), false);
-  show($("summary"), false);
+  show($("ended"), false);
   show($("live"), true);
   resetLive();
   if (bridgeSync) bridgeSync.stop();
@@ -220,7 +226,7 @@ async function startCall({ demo = false } = {}) {
     session = null;
     show($("live"), false);
     show($("setup"), true);
-    setNotice($("key-missing"), text, "error");
+    setNotice($("setup-notice"), text, "error");
   }
 }
 
@@ -228,16 +234,9 @@ function handleEvent(kind, payload) {
   switch (kind) {
     case "status":
       setStatus(payload);
-      if (payload === "stopping") $("countdown").textContent = "";
       break;
     case "transcript":
       addTranscriptLine(payload);
-      break;
-    case "insight":
-      showInsight(payload);
-      break;
-    case "insight_pending":
-      $("countdown").textContent = t("updating");
       break;
     case "warning":
       setNotice($("notice"), message(payload), "warn");
@@ -252,17 +251,11 @@ function handleEvent(kind, payload) {
     case "audio":
       $("audio-info").textContent = payload;
       break;
-    case "cost":
-      $("cost").textContent = `$${payload.total.toFixed(4)}`;
-      $("cost").title = t("cost_tip", {
-        live: `$${(payload.byPurpose.live || 0).toFixed(4)}`,
-        summary: `$${(payload.byPurpose.summary || 0).toFixed(4)}`,
-      });
-      break;
-    case "summary":
-      if (bridgeSync) bridgeSync.finish((payload.data && payload.data.summary) || "");
+    case "ended":
+      if (bridgeSync) bridgeSync.finish();
       bridgeSync = null;
-      showSummary(payload);
+      saveCall(payload);
+      showEnded(payload);
       break;
     default:
       break;
@@ -286,157 +279,9 @@ function addTranscriptLine(line) {
   if (atEnd) box.scrollTop = box.scrollHeight;
 }
 
-function showInsight(insight) {
-  $("topic").textContent = insight.topic || "—";
-  $("topic").className = "topic";
-  const list = $("suggestions");
-  list.innerHTML = "";
-  for (const s of insight.suggestions) {
-    const card = document.createElement("div");
-    card.className = "suggestion";
-    const kind = document.createElement("div");
-    kind.className = `kind ${s.kind}`;
-    kind.textContent = t(`kind_${s.kind}`);
-    const text = document.createElement("div");
-    text.className = "text";
-    text.textContent = s.text;
-    card.append(kind, text);
-    card.addEventListener("click", async (e) => {
-      if (await copyText(s.text, e.view || window)) {
-        copiedUntil = Date.now() + 2500;
-        $("countdown").textContent = t("copied");
-        card.dataset.copied = "1";
-      }
-    });
-    list.append(card);
-  }
-  const rem = $("remember");
-  rem.innerHTML = "";
-  for (const item of insight.remember) {
-    const li = document.createElement("li");
-    li.textContent = item;
-    rem.append(li);
-  }
-}
-
 function tick() {
   if (!session || !session.running || session.stopping) return;
   $("timer").textContent = fmtTime(session.elapsed());
-  if (Date.now() < copiedUntil) return;
-  const next = session.nextInsightIn();
-  if (next === null) $("countdown").textContent = "";
-  else if (next > 0) $("countdown").textContent = t("next_update", { s: Math.ceil(next) });
-}
-
-// ------------------------------------------------------------ Claude chat
-// Without an API key: copy the call with a ready-made request, open Claude,
-// the user pastes. The chat runs on their Claude plan and knows them.
-
-function claudeUrl() {
-  return settings.claudeUrl || CLAUDE_NEW_CHAT;
-}
-
-/** The link as typed if it is on claude.ai, "" for the default, null otherwise. */
-function cleanClaudeUrl(value) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  try {
-    const url = new URL(text);
-    return url.protocol === "https:" && url.hostname === "claude.ai" ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
-function personalNotes() {
-  const { text, empty } = memory.loadText();
-  return empty ? "" : text;
-}
-
-/** Copy first (a page that lost focus can't copy), then open Claude in a new tab. */
-async function sendToClaude(text, view, openTab) {
-  if (!(await copyText(text, view))) return false;
-  if (openTab) {
-    let win = null;
-    try {
-      win = view.open(claudeUrl(), "_blank");
-    } catch {
-      /* blocked: the user opens Claude */
-    }
-    if (win) claudeOpened = true;
-  }
-  return true;
-}
-
-async function askClaude(e) {
-  const view = e.view || window;
-  if (!session || !session.store.length) {
-    setNotice($("notice"), t("ask_empty"), "warn");
-    return;
-  }
-  // The personal notes go with the first request only: the chat keeps them.
-  const notes = notesSentTo === session ? "" : personalNotes();
-  const text = bridgeActive()
-    ? chatConnectorPrompt(settings.uiLanguage, "ask")
-    : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines, notes });
-  if (await sendToClaude(text, view, !claudeOpened)) {
-    notesSentTo = session;
-    setNotice($("notice"), t("ask_copied"), "ok");
-  } else setNotice($("notice"), t("ask_copy_failed"), "error");
-}
-
-async function summaryWithClaude(e) {
-  if (!lastResult) return;
-  const meta = `${new Date(lastResult.startedAt).toLocaleString()}, ${fmtTime(lastResult.durationS)}`;
-  const text = bridgeActive()
-    ? chatConnectorPrompt(settings.uiLanguage, "summary")
-    : chatSummaryPrompt({
-        lang: settings.uiLanguage,
-        meta,
-        lines: lastResult.transcript,
-        liveRemember: lastResult.liveRemember || [],
-        notes: personalNotes(),
-      });
-  const ok = await sendToClaude(text, e.view || window, true);
-  setNotice($("summary-claude-status"), t(ok ? "ask_copied" : "ask_copy_failed"), ok ? "ok" : "error");
-}
-
-// ------------------------------------------------------------------ bridge
-// With the user's bridge (bridge/ in the repository) Claude reads the call
-// itself, as a custom connector on claude.ai.
-
-function bridgeActive() {
-  return Boolean(settings.bridgeOn && settings.bridgeUrl && settings.bridgeKey);
-}
-
-function makeBridge(url = settings.bridgeUrl) {
-  if (!settings.bridgeKey) {
-    settings.bridgeKey = newBridgeKey();
-    saveSettings();
-  }
-  return new Bridge({ url, key: settings.bridgeKey });
-}
-
-function bridgeMessage(err) {
-  const code = err instanceof BridgeError ? err.code : "failed";
-  return t({ unreachable: "bridge_unreachable", not_found: "bridge_not_found", no_database: "bridge_no_db" }[code] || "bridge_failed");
-}
-
-function renderBridge(message = "") {
-  $("bridge-url").value = settings.bridgeUrl;
-  $("bridge-connector").value = bridgeActive() ? makeBridge().connectorUrl : "";
-  show($("bridge-connector-box"), bridgeActive());
-  show($("bridge-off"), bridgeActive());
-  $("bridge-status").textContent = message;
-}
-
-/** The small "Claude connected" note in the live panel. */
-function setBridgeState(state) {
-  const el = $("bridge-state");
-  el.className = `bridge-state small ${state || ""}`;
-  el.textContent = state === "ok" ? t("bridge_live_ok") : state === "error" ? t("bridge_live_error") : "";
-  show(el, Boolean(state));
-  if (state === "error") setNotice($("notice"), t("bridge_down"), "warn");
 }
 
 async function stopCall() {
@@ -445,88 +290,16 @@ async function stopCall() {
   await session.stop();
 }
 
-function showSummary(result) {
-  const call = { ...result };
-  saveCall(call);
+/** The end of a call (or a call opened from the history): what Claude can do with it now. */
+function showEnded(call) {
   lastResult = call;
-  const d = call.data || {};
-  $("summary-title").textContent = d.title || t("summary_title");
-  $("summary-meta").textContent = `${new Date(call.startedAt).toLocaleString()} · ${fmtTime(call.durationS)} · $${call.cost.toFixed(4)}`;
-  if (call.error === "no API key") setNotice($("summary-error"), t(bridgeActive() ? "summary_no_key_connector" : "summary_no_key"), "");
-  else setNotice($("summary-error"), call.error ? t("summary_failed", { error: call.error }) : "", "warn");
+  $("ended-meta").textContent = callLabel(call);
+  $("ended-hint").textContent = bridgeActive() ? t("ended_hint_connector") : t("ended_hint_copy");
   setNotice($("summary-claude-status"), "");
-  $("summary-body").textContent = d.summary || "";
-  const lists = $("summary-lists");
-  lists.innerHTML = "";
-  const addList = (title, items) => {
-    if (!items || !items.length) return;
-    const h = document.createElement("h3");
-    h.textContent = title;
-    const ul = document.createElement("ul");
-    for (const it of items) {
-      const li = document.createElement("li");
-      li.textContent = it;
-      ul.append(li);
-    }
-    lists.append(h, ul);
-  };
-  addList(t("key_points"), d.key_points);
-  addList(
-    t("actions"),
-    (d.action_items || []).map((a) => `${a.owner}: ${a.task}${a.due ? ` (${t("due")} ${a.due})` : ""}`),
-  );
-  addList(t("notes_live"), call.liveRemember);
-  renderProposals(call.proposals || []);
   if (pipWindow) pipWindow.close();
   show($("live"), false);
-  show($("summary"), true);
   show($("setup"), false);
-}
-
-function renderProposals(proposals) {
-  const box = $("proposals");
-  box.innerHTML = "";
-  show($("review"), proposals.length > 0);
-  setNotice($("review-status"), "");
-  const existing = new Set(memory.names().map((n) => n.toLowerCase()));
-  for (const p of proposals) {
-    const card = document.createElement("div");
-    card.className = "proposal";
-    const head = document.createElement("header");
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.checked = true;
-    const name = document.createElement("span");
-    const isNew = !existing.has(String(p.file).toLowerCase());
-    name.textContent = `${p.file}${isNew ? ` (${t("review_new_file")})` : ""}`;
-    head.append(check, name);
-    const reason = document.createElement("div");
-    reason.className = "reason";
-    reason.textContent = p.reason || "";
-    const area = document.createElement("textarea");
-    area.rows = Math.min(8, Math.max(2, String(p.content).split("\n").length + 1));
-    area.value = String(p.content).trim();
-    card.append(head, reason, area);
-    card.proposal = { p, check, area };
-    box.append(card);
-  }
-}
-
-function applyProposals() {
-  let n = 0;
-  const errors = [];
-  for (const card of $("proposals").children) {
-    const { p, check, area } = card.proposal;
-    if (!check.checked) continue;
-    try {
-      memory.apply({ file: p.file, content: area.value }, lastResult ? lastResult.id.slice(0, 16) : "");
-      n++;
-      card.remove();
-    } catch (err) {
-      errors.push(`${p.file}: ${err instanceof MemoryPathError ? err.message : err.message}`);
-    }
-  }
-  $("review-status").textContent = errors.length ? errors.join("; ") : t("review_done", { n });
+  show($("ended"), true);
 }
 
 async function openPip() {
@@ -536,7 +309,7 @@ async function openPip() {
   }
   if (pipWindow) return;
   const live = $("live");
-  pipWindow = await window.documentPictureInPicture.requestWindow({ width: 400, height: 640 });
+  pipWindow = await window.documentPictureInPicture.requestWindow({ width: 400, height: 560 });
   for (const sheet of document.styleSheets) {
     try {
       const style = pipWindow.document.createElement("style");
@@ -562,20 +335,123 @@ async function openPip() {
   });
 }
 
-// ---------------------------------------------------------------- memory
-function renderMemory(selected) {
-  const sel = $("mem-file");
-  const names = memory.names();
-  sel.innerHTML = "";
-  for (const n of names) {
-    const o = document.createElement("option");
-    o.value = n;
-    o.textContent = n;
-    sel.append(o);
+// ------------------------------------------------------------ Claude chat
+// «Ask Claude» copies a request and opens Claude: the user pastes it in the
+// chat. With the bridge the request is short, since Claude reads the call
+// itself; without it, the request carries the transcript.
+
+function claudeUrl() {
+  return settings.claudeUrl || CLAUDE_NEW_CHAT;
+}
+
+/** The link as typed if it is on claude.ai, "" for the default, null otherwise. */
+function cleanClaudeUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" && url.hostname === "claude.ai" ? url.href : null;
+  } catch {
+    return null;
   }
-  sel.value = selected && names.includes(selected) ? selected : names[0] || "";
-  $("mem-text").value = memory.files[sel.value] || "";
-  $("mem-status").textContent = "";
+}
+
+/** Copy first (a page that lost focus can't copy), then open Claude in a new tab. */
+async function sendToClaude(text, view, openTab) {
+  if (!(await copyText(text, view))) return false;
+  if (openTab) {
+    let win = null;
+    try {
+      win = view.open(claudeUrl(), "_blank");
+    } catch {
+      /* blocked: the user opens Claude */
+    }
+    if (win) claudeOpened = true;
+  }
+  return true;
+}
+
+async function askClaude(e) {
+  const view = e.view || window;
+  if (!session || !session.store.length) {
+    setNotice($("notice"), t("ask_empty"), "warn");
+    return;
+  }
+  const text = bridgeActive()
+    ? chatConnectorPrompt(settings.uiLanguage, "ask")
+    : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines });
+  if (await sendToClaude(text, view, !claudeOpened)) setNotice($("notice"), t("ask_copied"), "ok");
+  else setNotice($("notice"), t("ask_copy_failed"), "error");
+}
+
+async function summaryWithClaude(e) {
+  if (!lastResult) return;
+  const text = bridgeActive()
+    ? chatConnectorPrompt(settings.uiLanguage, "summary")
+    : chatSummaryPrompt({ lang: settings.uiLanguage, meta: callLabel(lastResult), lines: lastResult.transcript });
+  const ok = await sendToClaude(text, e.view || window, true);
+  setNotice($("summary-claude-status"), t(ok ? "ask_copied" : "ask_copy_failed"), ok ? "ok" : "error");
+}
+
+// ------------------------------------------------------------------ bridge
+// The user's bridge (bridge/ in the repository) keeps the call for Claude,
+// which reads it as a custom connector on claude.ai.
+
+function bridgeActive() {
+  return Boolean(settings.bridgeOn && settings.bridgeUrl && settings.bridgeKey);
+}
+
+function makeBridge(url = settings.bridgeUrl) {
+  if (!settings.bridgeKey) {
+    settings.bridgeKey = newBridgeKey();
+    saveSettings();
+  }
+  return new Bridge({ url, key: settings.bridgeKey });
+}
+
+function bridgeMessage(err) {
+  const code = err instanceof BridgeError ? err.code : "failed";
+  return t({ unreachable: "bridge_unreachable", not_found: "bridge_not_found", no_database: "bridge_no_db" }[code] || "bridge_failed");
+}
+
+/** Served by its own bridge (the repository deployed to Cloudflare): connect without asking. */
+async function connectHere() {
+  if (!settings.bridgeKey) {
+    settings.bridgeKey = newBridgeKey();
+    saveSettings();
+  }
+  try {
+    const bridge = await sameOriginBridge(settings.bridgeKey);
+    if (bridge) {
+      bridgeHere = true;
+      settings = { ...settings, bridgeUrl: bridge.url, bridgeOn: true };
+      saveSettings();
+    }
+  } catch (err) {
+    bridgeHere = true;
+    bridgeProblem = bridgeMessage(err);
+  }
+  renderClaudeBox();
+  if ($("tab-settings").classList.contains("active")) renderBridge();
+}
+
+function renderBridge(note = "") {
+  show($("bridge-manual"), !bridgeHere);
+  show($("bridge-here"), bridgeHere);
+  $("bridge-url").value = settings.bridgeUrl;
+  $("bridge-connector").value = bridgeActive() ? makeBridge().connectorUrl : "";
+  show($("bridge-connector-box"), bridgeActive());
+  show($("bridge-off"), bridgeActive());
+  $("bridge-status").textContent = note || (bridgeHere ? bridgeProblem : "");
+}
+
+/** The small "Claude connected" note in the live panel. */
+function setBridgeState(state) {
+  const el = $("bridge-state");
+  el.className = `bridge-state small ${state || ""}`;
+  el.textContent = state === "ok" ? t("bridge_live_ok") : state === "error" ? t("bridge_live_error") : "";
+  show(el, Boolean(state));
+  if (state === "error") setNotice($("notice"), t("bridge_down"), "warn");
 }
 
 // --------------------------------------------------------------- history
@@ -592,15 +468,16 @@ function renderHistory() {
     row.className = "call-item";
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = `${new Date(call.startedAt).toLocaleString()} · ${fmtTime(call.durationS)} · ${(call.data && call.data.title) || t("summary_title")}`;
+    const first = (call.transcript || []).find((l) => l.text);
+    title.textContent = `${callLabel(call)}${first ? ` · ${first.text.slice(0, 60)}` : ""}`;
     title.addEventListener("click", () => {
-      showSummary(call);
+      showEnded(call);
       showTab("call");
     });
     const md = document.createElement("button");
     md.textContent = ".md";
-    md.title = t("download_summary");
-    md.addEventListener("click", () => download(`${call.id.slice(0, 16).replace(/[:T]/g, "-")}-summary.md`, summaryMarkdown(call, t)));
+    md.title = t("download_transcript");
+    md.addEventListener("click", () => download(fileName(call, "transcript"), transcriptMarkdown(call, t)));
     const del = document.createElement("button");
     del.className = "ghost";
     del.textContent = t("history_delete");
@@ -614,7 +491,7 @@ function renderHistory() {
 }
 
 // -------------------------------------------------------------- settings
-async function renderManualModel(message = "") {
+async function renderManualModel(note = "") {
   const model = $("whisper-model").value || settings.whisperModel;
   const list = $("manual-links");
   list.innerHTML = "";
@@ -629,19 +506,16 @@ async function renderManualModel(message = "") {
     list.append(li);
   }
   const ready = await hasManualModel(model);
-  $("manual-status").textContent = [message, ready ? t("manual_ready") : ""].filter(Boolean).join(" ");
+  $("manual-status").textContent = [note, ready ? t("manual_ready") : ""].filter(Boolean).join(" ");
 }
 
 function renderSettings() {
-  $("api-key").value = getApiKey();
   $("whisper-model").value = settings.whisperModel;
   renderManualModel();
-  $("interval").value = settings.insightInterval;
-  $("summary-model").value = settings.summaryModel;
   $("ui-language").value = settings.uiLanguage;
   $("claude-url").value = settings.claudeUrl;
+  $("claude-url-status").textContent = "";
   renderBridge();
-  $("key-status").textContent = "";
   $("settings-status").textContent = "";
 }
 
@@ -649,17 +523,35 @@ function renderSettings() {
 function wire() {
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   $("start").addEventListener("click", () => startCall());
+  $("demo").addEventListener("click", () => startCall({ demo: true }));
+  $("stop").addEventListener("click", stopCall);
+  $("pip").addEventListener("click", openPip);
+  $("ask-claude").addEventListener("click", askClaude);
+  $("summary-claude").addEventListener("click", summaryWithClaude);
+  $("dl-transcript").addEventListener("click", () => lastResult && download(fileName(lastResult, "transcript"), transcriptMarkdown(lastResult, t)));
   $("new-call").addEventListener("click", () => {
-    show($("summary"), false);
+    show($("ended"), false);
     show($("live"), false);
     show($("setup"), true);
     renderSetup();
   });
-  $("demo").addEventListener("click", () => startCall({ demo: true }));
-  $("stop").addEventListener("click", stopCall);
-  $("refresh").addEventListener("click", () => session && session.requestInsight());
-  $("pip").addEventListener("click", openPip);
-  $("ask-claude").addEventListener("click", askClaude);
+  $("live-language").addEventListener("change", (e) => {
+    settings.callLanguage = e.target.value;
+    saveSettings();
+    if (session) session.setLanguage(e.target.value);
+  });
+
+  // The last step of the setup, in the Call tab: the connector on claude.ai.
+  $("setup-copy").addEventListener("click", async (e) => {
+    if (await copyText($("setup-connector").value, e.view || window)) $("claude-text").textContent = t("claude_copied");
+  });
+  $("setup-done").addEventListener("click", () => {
+    settings = { ...settings, connectorAdded: true };
+    saveSettings();
+    renderClaudeBox();
+  });
+  $("go-settings").addEventListener("click", () => showTab("settings"));
+
   $("bridge-connect").addEventListener("click", async () => {
     const url = cleanBridgeUrl($("bridge-url").value);
     if (!url) {
@@ -672,6 +564,7 @@ function wire() {
       settings = { ...settings, bridgeUrl: url, bridgeOn: true };
       saveSettings();
       renderBridge(t("bridge_ok"));
+      renderClaudeBox();
     } catch (err) {
       $("bridge-status").textContent = bridgeMessage(err);
     }
@@ -683,6 +576,7 @@ function wire() {
     bridgeSync = null;
     setBridgeState(null);
     renderBridge(t("bridge_off_done"));
+    renderClaudeBox();
   });
   $("bridge-copy").addEventListener("click", async (e) => {
     if (await copyText($("bridge-connector").value, e.view || window)) $("bridge-status").textContent = t("copied");
@@ -701,96 +595,21 @@ function wire() {
     } catch {
       /* they expire within 48 hours anyway */
     }
-    settings = { ...settings, bridgeKey: newBridgeKey() };
+    settings = { ...settings, bridgeKey: newBridgeKey(), connectorAdded: false };
     saveSettings();
     renderBridge(t("bridge_new_key_done"));
+    renderClaudeBox();
   });
-  $("summary-claude").addEventListener("click", summaryWithClaude);
-  $("live-language").addEventListener("change", (e) => {
-    settings.callLanguage = e.target.value;
+
+  $("claude-url").addEventListener("change", () => {
+    const chatUrl = cleanClaudeUrl($("claude-url").value);
+    if (chatUrl === null) {
+      $("claude-url-status").textContent = t("settings_claude_url_bad");
+      return;
+    }
+    settings = { ...settings, claudeUrl: chatUrl };
     saveSettings();
-    if (session) session.setLanguage(e.target.value);
-  });
-  $("dl-summary").addEventListener("click", () => lastResult && download(`${lastResult.id.slice(0, 16).replace(/[:T]/g, "-")}-summary.md`, summaryMarkdown(lastResult, t)));
-  $("dl-transcript").addEventListener("click", () => lastResult && download(`${lastResult.id.slice(0, 16).replace(/[:T]/g, "-")}-transcript.md`, transcriptMarkdown(lastResult, t)));
-  $("apply-proposals").addEventListener("click", applyProposals);
-
-  $("mem-file").addEventListener("change", (e) => {
-    $("mem-text").value = memory.files[e.target.value] || "";
-  });
-  $("mem-save").addEventListener("click", () => {
-    const ok = memory.write($("mem-file").value, $("mem-text").value);
-    $("mem-status").textContent = ok ? t("mem_saved") : "!";
-  });
-  $("mem-new").addEventListener("click", () => {
-    const name = prompt(t("mem_new_prompt"), "people/");
-    if (!name) return;
-    try {
-      const path = memory.resolve(name.endsWith(".md") ? name : `${name}.md`);
-      if (!(path in memory.files)) memory.write(path, `# ${path.split("/").pop().replace(/\.md$/, "")}\n\n`);
-      renderMemory(path);
-    } catch (err) {
-      $("mem-status").textContent = err.message;
-    }
-  });
-  $("mem-delete").addEventListener("click", () => {
-    const name = $("mem-file").value;
-    if (name && confirm(t("mem_delete_confirm", { name }))) {
-      memory.remove(name);
-      renderMemory();
-    }
-  });
-  $("copy-prompt").addEventListener("click", async () => {
-    if (await copyText(t("import_prompt"))) $("import-status").textContent = t("copied");
-  });
-  $("import-save").addEventListener("click", () => {
-    const text = $("import-text").value;
-    if (!text.trim()) {
-      $("import-status").textContent = t("import_empty");
-      return;
-    }
-    const path = memory.importClaudeExport(text);
-    $("import-text").value = "";
-    $("import-status").textContent = t("import_done", { path });
-  });
-  $("mem-export").addEventListener("click", () => download(`memoria-call-assistant-${new Date().toISOString().slice(0, 10)}.md`, memory.exportBundle()));
-  $("mem-import-file").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const text = await file.text();
-    let n = memory.importBundle(text);
-    if (!n) {
-      // A plain Markdown file (e.g. from the desktop app's memory folder).
-      memory.write(file.name.endsWith(".md") ? file.name : `${file.name}.md`, text);
-      n = 1;
-    }
-    $("backup-status").textContent = t("mem_import_backup_done", { n });
-    renderMemory();
-    e.target.value = "";
-  });
-
-  $("key-save").addEventListener("click", () => {
-    const key = $("api-key").value.trim();
-    if (!key.startsWith("sk-ant-")) {
-      $("key-status").textContent = t("settings_key_invalid");
-      return;
-    }
-    try {
-      store()?.setItem(API_KEY, key);
-    } catch {
-      /* ignore */
-    }
-    $("key-status").textContent = t("settings_key_saved");
-    renderSetup();
-  });
-  $("key-forget").addEventListener("click", () => {
-    try {
-      store()?.removeItem(API_KEY);
-    } catch {
-      /* ignore */
-    }
-    $("api-key").value = "";
-    renderSetup();
+    $("claude-url-status").textContent = t("settings_saved");
   });
   $("whisper-model").addEventListener("change", () => renderManualModel());
   $("manual-files").addEventListener("change", async (e) => {
@@ -812,25 +631,16 @@ function wire() {
     e.target.value = "";
   });
   $("settings-save").addEventListener("click", () => {
-    const interval = Math.max(10, Math.min(120, Number($("interval").value) || 25));
     const uiChanged = $("ui-language").value !== settings.uiLanguage;
     const chatUrl = cleanClaudeUrl($("claude-url").value);
     if (chatUrl === null) {
       $("settings-status").textContent = t("settings_claude_url_bad");
       return;
     }
-    settings = {
-      ...settings,
-      whisperModel: $("whisper-model").value,
-      insightInterval: interval,
-      summaryModel: $("summary-model").value,
-      uiLanguage: $("ui-language").value,
-      claudeUrl: chatUrl,
-    };
+    settings = { ...settings, whisperModel: $("whisper-model").value, uiLanguage: $("ui-language").value, claudeUrl: chatUrl };
     saveSettings();
     if (uiChanged) {
       t = translator(settings.uiLanguage);
-      memory = new Memory(settings.uiLanguage);
       applyTranslations();
       renderSetup();
     }
@@ -848,5 +658,6 @@ function wire() {
 applyTranslations();
 wire();
 renderSetup();
-$("topic").textContent = t("waiting_first", { s: settings.insightInterval });
-window.__callAssistant = { get session() { return session; }, memory: () => memory };
+renderClaudeBox(!bridgeActive());
+connectHere();
+window.__callAssistant = { get session() { return session; } };

@@ -63,8 +63,12 @@ assert.match(text, /Status: in progress/);
 assert.match(text, /\[00:02\] Them: Ciao, hai visto la mia offerta di lavoro a Milano\?\n\[00:07\] Me: Sì, quando dovresti iniziare\?/);
 const list = await client.callTool({ name: "list_calls", arguments: {} });
 assert.match(list.content[0].text, new RegExp(`id ${id.replace(/[.]/g, "\\.")}: .*2 lines`));
+const { prompts } = await client.listPrompts();
+assert.deepEqual(prompts.map((p) => p.title), ["Cosa dico adesso?", "Cosa mi hanno chiesto?", "Riassumi la chiamata"]);
+const prompt = await client.getPrompt({ name: "cosa_dico_adesso", arguments: {} });
+assert.match(prompt.messages[0].content.text, /^Sono in una chiamata adesso\.[\s\S]*Me: Sì, quando dovresti iniziare\?\n<\/call>$/);
 await client.close();
 
 await fetch(`${bridge.base}/api/${key}/delete`, { method: "POST" });
 bridge.close();
-console.log(`ok - official MCP client: handshake, tools/list, tools/call against ${process.argv[2] || "the Worker code in-process"}`);
+console.log(`ok - official MCP client: handshake, tools/list, tools/call, prompts/list, prompts/get against ${process.argv[2] || "the Worker code in-process"}`);
