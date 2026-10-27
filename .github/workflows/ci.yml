@@ -151,3 +151,6 @@ jobs:
           for i in $(seq 1 90); do curl -sf http://127.0.0.1:8787/ > /dev/null && break; sleep 1; done
           node test/mcp-client.mjs http://127.0.0.1:8787 || { tail -40 wrangler.log; exit 1; }
           npx wrangler deploy --dry-run --outdir dist
+          # The repository deployed as it is (root wrangler.jsonc) is the same bridge, with no static files.
+          npx wrangler deploy --dry-run --config ../wrangler.jsonc --outdir dist-root 2>&1 | tee root-deploy.log
+          grep -q "env.DB" root-deploy.log && ! grep -qi "assets" root-deploy.log
