@@ -286,7 +286,23 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.match(prompt.messages[0].content.text, /^Sono in una chiamata adesso\.[\s\S]*<call>\nCall /);
   // Claude's suggestions, sent with show_suggestions, appear left of the transcript.
   assert.ok(await page.evaluate(() => document.getElementById("live-body").classList.contains("two")));
-  assert.match(await page.textContent("#sug-topic"), /Segui la chiamata/);
+  assert.match(await page.textContent("#sug-topic"), /Fai seguire a Claude/);
+  // One click: the request to follow the call, ready to paste in Claude's chat.
+  assert.equal((await page.textContent("#ask-claude")).trim(), "Fai seguire a Claude ↗");
+  await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
+  assert.match(await clipboard(page), /^Segui la chiamata in corso con il connector della mia pagina[\s\S]*get_current_call[\s\S]*show_suggestions/);
+  assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat di Claude/);
+  // The meeting briefing (from the user's Cockpit artifact, or from Claude): its title shows above the suggestions.
+  assert.ok(await page.isHidden("#meeting"));
+  const briefing = await mcp(connector, "tools/call", {
+    name: "set_meeting_context",
+    arguments: { title: "Offerta Milano", goal: "Chiudere la data di inizio", objectives: ["Data di inizio"], questions: ["Chi paga il trasloco?"] },
+  }, appEnv);
+  assert.match(briefing.content[0].text, /^Briefing saved for «Offerta Milano»/);
+  await page.waitForSelector("#meeting:not(.hidden)", { timeout: 15000 });
+  assert.equal(await page.textContent("#meeting-title"), "Offerta Milano");
+  assert.equal(await page.textContent("#meeting-goal"), "· Chiudere la data di inizio");
+  assert.match(await readBridge(connector, "get_current_call", {}, appEnv), /^Meeting briefing, written by the user[\s\S]*Questions to close:\n- Chi paga il trasloco\?[\s\S]*Status: in progress/);
   const shown = await mcp(connector, "tools/call", {
     name: "show_suggestions",
     arguments: {
@@ -342,9 +358,9 @@ await step("bridge at another address (e.g. the app on GitHub Pages): connect it
   const live = await untilBridge(connector, /Me: frase di prova 2/);
   assert.match(live, /Status: in progress/);
   await page.waitForSelector("#bridge-state.ok");
-  // «Ask Claude» now copies only the request: Claude reads the call itself.
+  // «Let Claude follow» copies only the request: Claude reads the call itself.
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
-  assert.match(await clipboard(page), /^Usa il connector della mia pagina Assistente chiamate \(strumento get_current_call\)/);
+  assert.match(await clipboard(page), /^Segui la chiamata in corso con il connector della mia pagina Assistente chiamate/);
 
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });

@@ -7,9 +7,9 @@
   <meta name="description" content="Assistente per chiamate e video: trascrive nel browser con Whisper e Claude legge la chiamata dalla tua chat.">
   <link rel="icon" href="assets/icon.png">
   <!-- stamp:start -->
-  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=a74f0544f9","./js/audio-worklet.js":"./js/audio-worklet.js?v=a74f0544f9","./js/audio.js":"./js/audio.js?v=a74f0544f9","./js/bridge.js":"./js/bridge.js?v=a74f0544f9","./js/history.js":"./js/history.js?v=a74f0544f9","./js/i18n.js":"./js/i18n.js?v=a74f0544f9","./js/model-files.js":"./js/model-files.js?v=a74f0544f9","./js/prompts.js":"./js/prompts.js?v=a74f0544f9","./js/segmenter.js":"./js/segmenter.js?v=a74f0544f9","./js/session.js":"./js/session.js?v=a74f0544f9","./js/transcriber.js":"./js/transcriber.js?v=a74f0544f9","./js/transcript.js":"./js/transcript.js?v=a74f0544f9","./js/whisper-worker.js":"./js/whisper-worker.js?v=a74f0544f9"}}</script>
-  <link rel="stylesheet" href="css/app.css?v=a74f0544f9">
-  <script type="module" src="js/app.js?v=a74f0544f9"></script>
+  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=2194edafd1","./js/audio-worklet.js":"./js/audio-worklet.js?v=2194edafd1","./js/audio.js":"./js/audio.js?v=2194edafd1","./js/bridge.js":"./js/bridge.js?v=2194edafd1","./js/history.js":"./js/history.js?v=2194edafd1","./js/i18n.js":"./js/i18n.js?v=2194edafd1","./js/model-files.js":"./js/model-files.js?v=2194edafd1","./js/prompts.js":"./js/prompts.js?v=2194edafd1","./js/segmenter.js":"./js/segmenter.js?v=2194edafd1","./js/session.js":"./js/session.js?v=2194edafd1","./js/transcriber.js":"./js/transcriber.js?v=2194edafd1","./js/transcript.js":"./js/transcript.js?v=2194edafd1","./js/whisper-worker.js":"./js/whisper-worker.js?v=2194edafd1"}}</script>
+  <link rel="stylesheet" href="css/app.css?v=2194edafd1">
+  <script type="module" src="js/app.js?v=2194edafd1"></script>
   <!-- stamp:end -->
 </head>
 <body>
@@ -84,6 +84,7 @@
         <p id="live-hint" class="live-hint"></p>
         <div id="live-body" class="live-body">
           <section id="claude-col" class="claude-col hidden" aria-live="polite">
+            <div id="meeting" class="meeting hidden"><strong id="meeting-title"></strong> <span id="meeting-goal" class="muted"></span></div>
             <div class="section-head"><span data-t="sec_suggestions"></span><span class="spacer"></span><span id="sug-time" class="muted small"></span></div>
             <p id="sug-topic" class="topic waiting"></p>
             <div id="suggestions"></div>

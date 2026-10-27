@@ -166,6 +166,8 @@ function resetLive() {
   $("live-body").classList.toggle("two", withClaude);
   show($("live-hint"), !withClaude);
   $("live-hint").textContent = t("live_hint_copy");
+  $("ask-claude").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
+  showMeeting(null);
   showSuggestions(null);
   showLatency(null);
   setBridgeState(null);
@@ -224,7 +226,7 @@ async function startCall({ demo = false } = {}) {
   try {
     await session.start();
     if (bridgeActive()) {
-      bridgeSync = new BridgeSync({ bridge: makeBridge(), session, onState: setBridgeState, onSuggestions: showSuggestions });
+      bridgeSync = new BridgeSync({ bridge: makeBridge(), session, onState: setBridgeState, onSuggestions: showSuggestions, onMeeting: showMeeting });
       bridgeSync.start();
     }
   } catch (err) {
@@ -296,6 +298,13 @@ function showLatency(seconds) {
   latencies = seconds === null ? [] : [...latencies, seconds].slice(-5);
   const avg = latencies.reduce((a, b) => a + b, 0) / Math.max(1, latencies.length);
   $("latency").textContent = latencies.length ? t("latency", { s: avg.toFixed(1) }) : "";
+}
+
+/** The meeting's title and goal, from the briefing (the Cockpit, or Claude with set_meeting_context). */
+function showMeeting(m) {
+  show($("meeting"), Boolean(m));
+  $("meeting-title").textContent = (m && m.title) || "";
+  $("meeting-goal").textContent = m && m.goal ? `· ${m.goal}` : "";
 }
 
 /** What Claude sent with show_suggestions (null: the hint to ask for it). */
@@ -426,14 +435,14 @@ async function sendToClaude(text, view, openTab) {
 
 async function askClaude(e) {
   const view = e.view || window;
-  if (!session || !session.store.length) {
+  if (!session || (!session.store.length && !bridgeActive())) {
     setNotice($("notice"), t("ask_empty"), "warn");
     return;
   }
-  const text = bridgeActive()
-    ? chatConnectorPrompt(settings.uiLanguage, "ask")
-    : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines });
-  if (await sendToClaude(text, view, !claudeOpened)) setNotice($("notice"), t("ask_copied"), "ok");
+  // With the bridge: the request to follow the call (Claude reads it and sends suggestions here); without: the transcript.
+  const follow = bridgeActive();
+  const text = follow ? chatConnectorPrompt(settings.uiLanguage, "follow") : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines });
+  if (await sendToClaude(text, view, !claudeOpened)) setNotice($("notice"), t(follow ? "follow_copied" : "ask_copied"), "ok");
   else setNotice($("notice"), t("ask_copy_failed"), "error");
 }
 

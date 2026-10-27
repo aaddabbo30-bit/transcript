@@ -4,10 +4,11 @@ A personal assistant for your calls and videos, in the spirit of Proactor.ai but
 
 - **It listens and writes down.** A web page hears your microphone and the call's audio (the tab or screen you share), and transcribes it in your browser with Whisper, in Italian and English. The audio never leaves your computer.
 - **Claude reads the call.** The page sends the transcript to your own small bridge on Cloudflare (free). Claude reads it from there, as a **connector** on claude.ai.
-- **You ask in the chat.** During the call, pick **«Cosa dico adesso?»** among the connector's prompts, or simply ask «what should I say now?» or «what did they just ask me?». After the call, ask for the summary. Claude answers on your Claude plan, and knows you from your Claude memory.
+- **Claude follows the call.** Press **Let Claude follow ↗** and paste in a Claude chat, or just write «segui la chiamata»: Claude reads each new line and sends its suggestions next to the transcript. You can also ask «what should I say now?» or «what did they just ask me?», and after the call ask for the summary. Claude answers on your Claude plan, and knows you from your Claude memory.
+- **It knows the meeting.** A briefing (goal, participants, your positions, objectives, questions to close) reaches Claude with every read of the call. You write it in the chat or in a claude.ai artifact.
 
 <p align="center">
-  <img src="docs/web-live.png" alt="The page during a call: Claude's suggestions on the left, the transcript on the right" width="760">
+  <img src="docs/web-live.png" alt="The page during a call: the meeting briefing and Claude's suggestions on the left, the transcript on the right" width="760">
 </p>
 
 > The screenshots come from demo mode (a made-up call) rendered by the real app.
@@ -17,6 +18,7 @@ A personal assistant for your calls and videos, in the spirit of Proactor.ai but
 0. [Web app with Claude](#0-web-app-with-claude) (recommended)
    - [Set it up (once)](#set-it-up-once)
    - [Use it during a call](#use-it-during-a-call)
+   - [Meeting briefing](#meeting-briefing)
    - [Without the bridge: Ask Claude](#without-the-bridge-ask-claude)
    - [Privacy and limits](#privacy-and-limits)
 1. [Windows app: install](#1-install-step-by-step) (optional, uses an Anthropic API key)
@@ -69,19 +71,25 @@ The connector address contains a secret key made by the page and kept in that br
    - for a call on your phone, put it on speaker and leave only *My microphone* ticked.
 
    The live panel shows *Claude connected*, **Claude's suggestions on the left** and **the transcript on the right**.
-2. **Let Claude follow the call.** In a claude.ai chat with the connector on (the tools menu under the message box), pick the connector's prompt **«Segui la chiamata»** (the chat's **+** button).
+2. **Let Claude follow the call.** Press **Fai seguire a Claude ↗ / Let Claude follow ↗**. It copies the request and, the first time, opens claude.ai. Paste it (Ctrl+V) in a chat with the connector on (the tools menu under the message box) and send.
+   - Or just write **«segui la chiamata»** / «follow the call»: the connector's own tool descriptions tell Claude how to follow it.
    - Claude waits for new lines, and whenever there is something useful it sends to the page: the topic, up to 3 things you could say now (questions or answers, using what it knows about you from your Claude memory) and things to remember.
    - They appear in the left column; click one to copy it. You don't need to read the chat.
    - The first time, claude.ai asks to allow the connector's tools: choose **Always allow**, or it asks again at every step.
    - Claude stops when the call ends, or after 30 rounds: then ask it to continue.
-3. **Or ask when you need it.** The other prompts bring the latest transcript with them, so Claude answers at once:
-   - **«Cosa dico adesso?»** (also sent to the left column);
-   - **«Cosa mi hanno chiesto?»**;
-   - **«Riassumi la chiamata»**.
-
-   Or just write: «what did they just ask me?», «what did we decide about the budget?». Claude reads the call with the connector's tools.
+   - The connector also has prompts (**«Segui la chiamata»**, **«Cosa dico adesso?»**, **«Cosa mi hanno chiesto?»**, **«Riassumi la chiamata»**, under the chat's **+** button), but claude.ai doesn't show a custom connector's prompts everywhere. The button and the written request always work.
+3. **Or ask when you need it.** Write «cosa dico adesso?», «what did they just ask me?», «what did we decide about the budget?». Claude reads the call with the connector's tools; its suggestions also go to the left column.
 4. **Always on top.** **⧉ Always on top** moves the live panel into a small window that stays above the call. In a narrow window the suggestions sit above the transcript.
-5. **Stop.** Press **Stop** at the end. Then, in Claude, pick **«Riassumi la chiamata»** or ask for a summary. The call is also kept in the app's **History**, where you can download the transcript.
+5. **Stop.** Press **Stop** at the end. Then ask Claude for a summary (**Summary with Claude ↗** copies the request). The call is also kept in the app's **History**, where you can download the transcript.
+
+### Meeting briefing
+
+Before or during a meeting, give Claude its context: title, goal, participants and roles, your constraints and positions, background (acronyms, state of the topics, notes), objectives and questions to close. The bridge keeps it and puts it above the transcript every time Claude reads the call, so the suggestions follow your objectives. The page shows its title and goal above Claude's suggestions.
+
+- **In the chat:** describe the meeting and ask Claude to save it as the briefing (tool `set_meeting_context`). Mark reached objectives and closed questions with ✓ as the meeting goes on.
+- **From a claude.ai artifact:** a page you made in Claude (for example a meeting-prep cockpit with goal, objectives and agenda) can use the connector too. Give it the `mcp` capability with the *Call Assistant* tools `set_meeting_context`, `get_current_call` and `show_suggestions`: it shares the briefing whenever you edit it, reads the call, and sends its own suggestions to the page.
+
+A new briefing replaces the old one. The bridge keeps it for 14 days; **Delete the calls from the bridge** removes it too.
 
 The first time, the Whisper model downloads (about 150 MB for `base`), and the browser keeps it for next time. Some company networks let downloads from Hugging Face through only after a security check in a browser tab; then the page can't download the model by itself. In that case use **Settings → Load the model by hand**:
 - click the 7 links, one at a time, so each file downloads in a tab and passes the check: the two large `.onnx` files and five small `.json` files;
@@ -94,7 +102,7 @@ They are stored in that browser's cache, so the app finds them there. The status
 **How quickly things appear.** The live panel shows how long after the end of each sentence its text appeared (*text 2.1 s after speech*). What adds up:
 - **The end of the sentence.** A sentence is transcribed when it ends: after a 0.5 s pause, or after 8 s of continuous speech, cut at a quiet point.
 - **Whisper on your computer.** Usually 1–3 s per sentence with `base`. Served by your Worker, the page is *cross-origin isolated* (`web/_headers`), so Whisper runs on up to 4 CPU threads instead of 1. On GitHub Pages it runs on one thread, so it is slower. `small` is more accurate but slower.
-- **To Claude.** Each new line reaches the bridge at once. «Segui la chiamata» reads it as soon as it arrives, and its suggestions reach the page within about 2.5 s. Then it depends on how long Claude takes to answer.
+- **To Claude.** Each new line reaches the bridge at once. Claude, while it follows the call, reads it as soon as it arrives, and its suggestions reach the page within about 2.5 s. Then it depends on how long Claude takes to answer.
 
 ### Other ways to set it up
 
@@ -116,15 +124,15 @@ If the bridge can't be reached (for example a company network that blocks `worke
 
 With the bridge connected, the same buttons copy only a short request, since Claude reads the call itself. In **Settings → Claude chat to open** you can put the link of one of your claude.ai Projects, so these chats end up there.
 
-Why not run the whole thing inside Claude, as an artifact? Artifacts on claude.ai can't use the microphone or capture the audio of a tab, and Claude can't switch them on from its side. So the page does the listening, and the Claude chat does the thinking.
+Why not run the whole thing inside Claude, as an artifact? Artifacts on claude.ai can't use the microphone or capture the audio of a tab, and Claude can't switch them on from its side. So the page does the listening, and the Claude chat does the thinking. An artifact can still add the meeting's context and its own suggestions: see [Meeting briefing](#meeting-briefing).
 
 ### Privacy and limits
 
 - **Audio:** transcribed inside your browser with Whisper (Transformers.js). It never leaves your computer.
-- **Transcript:** it goes to your own bridge on Cloudflare, and Claude reads it from there. The bridge keeps calls for 48 hours at most, and only the last 10, plus the latest suggestions Claude sent. **Delete the calls from the bridge** (Settings) removes them at once. The app's **History** keeps them in that browser only.
+- **Transcript:** it goes to your own bridge on Cloudflare, and Claude reads it from there. The bridge keeps calls for 48 hours at most, and only the last 10, plus the latest suggestions Claude sent and the meeting briefing (14 days). **Delete the calls from the bridge** (Settings) removes them at once. The app's **History** keeps them in that browser only.
 - **The connector address is a secret:** whoever has it can read your calls. Keep it private; **Change secret address** makes a new one.
 - **Company networks:** some block `workers.dev`. The live panel then shows *Bridge to Claude unreachable*; use *Ask Claude* meanwhile.
-- **Claude answers when you ask.** It doesn't follow the call by itself: ask again for an update.
+- **Claude follows the call only from a chat.** It starts when you ask (button or «segui la chiamata») and stops at the end of the call or after 30 rounds. Unless you chose *Always allow*, claude.ai asks before each use of the connector's tools.
 - **Tell the people you talk with** that you are transcribing the call.
 - **Cloudflare's free limits** are far above what one person's calls use: the page sends at most one update every 6 seconds, and only when the transcript changed.
 
@@ -384,7 +392,7 @@ Run it locally with any static server, for example `python -m http.server -d web
 Tests:
 - `node --test web/tests/unit.test.mjs` runs 17 unit tests: segmentation on a real recording, filters, echo removal, full simulated calls with their delays, the chat requests, the bridge client and its suggestions.
 - `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording. It covers:
-  - the app served by its bridge: it connects by itself, shows the connector step, Claude's side reads the call over MCP, and the suggestions Claude sends appear left of the transcript;
+  - the app served by its bridge: it connects by itself, shows the connector step, copies the request to follow the call, Claude's side reads the call over MCP, the suggestions Claude sends appear left of the transcript, and the meeting briefing shows above them;
   - a bridge at another address, connected in Settings;
   - *Ask Claude* without a bridge, the end of a call, the history and the transcript download;
   - the always-on-top window, the model loaded by hand, and the version stamp of every script, including the Whisper worker.
@@ -398,12 +406,13 @@ A Cloudflare Worker with no dependencies, [`bridge/src/worker.js`](bridge/src/wo
 - **For Claude:** `POST /mcp/<key>` is an MCP server over Streamable HTTP, with JSON responses and no login.
   - Read-only tools: `get_current_call` (with `since_line` and `wait_seconds`, it waits up to 25 s for new lines, to follow a call), `list_calls` and `get_call`.
   - `show_suggestions`: Claude sends the topic, things to say and things to remember. The page picks them up with its next update (`GET /api/<key>/suggestions`, or the answer to its `POST`).
-  - Four prompts that carry the transcript: `segui_la_chiamata`, `cosa_dico_adesso`, `cosa_mi_hanno_chiesto` and `riassunto_chiamata`.
+  - `set_meeting_context`: the meeting briefing. `get_current_call` and the prompts put it above the transcript; the page gets its title and goal (`meeting` in the same answers).
+  - Four prompts that carry the transcript: `segui_la_chiamata`, `cosa_dico_adesso`, `cosa_mi_hanno_chiesto` and `riassunto_chiamata`. claude.ai doesn't always show them, so `get_current_call`'s description also explains how to follow a call when the user asks for it.
   - When the Worker also serves the app, its answers include the app's address, so Claude can give the user the link.
 - **The app itself:** with the root [`wrangler.jsonc`](wrangler.jsonc), `web/` is published as static assets of the same Worker (`/web/…` links redirect to `/…`); `bridge/wrangler.jsonc` publishes the bridge alone.
   - [`web/_headers`](web/_headers) makes the page cross-origin isolated (`COOP: same-origin`, `COEP: credentialless`). onnxruntime-web then runs Whisper on several threads.
 
-Storage is D1, bound as `DB`. The table is created on the first request; the database is created by the first deploy. `<key>` is a random 32-character secret made by the page; the database stores only its SHA-256.
+Storage is D1, bound as `DB`. The tables are created on the first request; the database is created by the first deploy. `<key>` is a random 32-character secret made by the page; the database stores only its SHA-256.
 
 Tests:
 - `node --test bridge/test/*.test.mjs` runs the Worker against Node's built-in SQLite.
@@ -431,7 +440,7 @@ This project was built in a cloud environment without a sound card, without Wind
 - **Web app and bridge**:
   - tested by unit tests, the official MCP client and 7 browser scenarios with a fake microphone (see above);
   - in CI the bridge also runs on Cloudflare's local runtime (`wrangler dev`), alone and together with the app;
-  - not covered by tests: claude.ai itself (adding the connector, where its prompts appear) and the deploy on a real Cloudflare account.
+  - not covered by tests: claude.ai itself (adding the connector, where its prompts appear, how long a chat keeps following a call, artifacts calling the connector) and the deploy on a real Cloudflare account.
 
 ---
 
