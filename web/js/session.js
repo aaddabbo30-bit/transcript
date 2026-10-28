@@ -5,9 +5,16 @@
 
 import { AudioRouter, ME, TARGET_RATE, THEM } from "./segmenter.js";
 import { TranscriptStore, cleanTranscription } from "./transcript.js";
+import { glossaryPrompt, judgeSegment } from "./whisper-core.js";
 
-const BACKLOG_WARNING = 6;
 const SILENT_SHARED_AFTER_S = 45;
+// Whisper always works on a 30 s window, however short the audio: when it is
+// busy, the utterances that pile up are joined and transcribed together.
+const MERGE_MAX_S = 27;
+const MERGE_GAP_S = 12; // utterances further apart than this stay separate lines
+const JOIN_PAUSE_S = 0.25; // silence put between joined utterances
+const LAG_WARNING_S = 30; // text this late, for a while: the computer is too slow for the model
+const ECHO_WARNING = 3; // microphone echoes dropped before telling the user
 
 export class CallSession {
   constructor({ settings, transcriber = null, capture = null, replay = null, onEvent, clock }) {
@@ -24,9 +31,18 @@ export class CallSession {
     this.running = false;
     this.stopping = false;
     this.done = false;
-    this.backlogWarned = false;
+    this.lagWarned = false;
     this.sharedWarned = false;
+    this.echoWarned = false;
     this.pendingTranscriptions = new Set();
+    this.queue = []; // utterances waiting for Whisper
+    this.busy = false; // Whisper is transcribing a batch
+    this.spans = []; // recent utterances {source, start, end}: who spoke when
+    this.languages = { [ME]: [], [THEM]: [] }; // languages Whisper heard lately, per speaker
+    this.glossary = "";
+    this.stats = { echoes: 0, dropped: 0, batches: 0, joined: 0, audioS: 0, workMs: 0 };
+    this.lag = 0;
+    this.lateSince = null;
     this.result = null;
   }
 
@@ -46,10 +62,17 @@ export class CallSession {
     this.language = lang;
   }
 
+  /** Names and terms of the meeting (from the briefing): Whisper spells them right. */
+  setGlossary(terms) {
+    this.glossary = glossaryPrompt(terms);
+  }
+
   async start() {
     this.t0 = this.clock();
     this.running = true;
-    this.router = new AudioRouter((chunk) => this.transcribe(chunk), () => this.elapsed());
+    this.router = new AudioRouter((chunk) => this.transcribe(chunk), () => this.elapsed(), {
+      onEcho: () => this.echoDropped(),
+    });
     this.timer = setInterval(() => this.tick(), 250);
 
     if (this.transcriber) {
@@ -78,21 +101,106 @@ export class CallSession {
     this.emit("audio", devices.join(" · "));
   }
 
-  async transcribe(chunk) {
+  /** A new utterance: queue it; Whisper takes the oldest when it is free. */
+  transcribe(chunk) {
     if (!this.transcriber || this.transcriberFailed) return;
-    // When the speech ended (the audio is handed over to the worker, so measure it now).
-    const end = chunk.start + chunk.audio.length / TARGET_RATE;
-    const job = (async () => {
-      await this.transcriberReady;
-      if (this.transcriberFailed) return;
-      const text = cleanTranscription(await this.transcriber.transcribe(chunk.audio, this.language));
-      if (text) {
-        this.addLine({ t: chunk.start, speaker: chunk.source, text });
-        this.emit("latency", Math.max(0, this.elapsed() - end)); // seconds from the end of the speech to its text
-      }
-    })();
+    this.spans.push({ source: chunk.source, start: chunk.start, end: chunk.end });
+    if (this.spans.length > 400) this.spans.splice(0, this.spans.length - 300);
+    this.queue.push(chunk);
+    this.pump();
+  }
+
+  echoDropped() {
+    this.stats.echoes++;
+    if (this.stats.echoes >= ECHO_WARNING && !this.echoWarned) {
+      this.echoWarned = true;
+      this.emit("warning", "echo");
+    }
+  }
+
+  pump() {
+    if (this.busy || !this.queue.length) return;
+    const batch = this.nextBatch();
+    this.busy = true;
+    const job = this.runBatch(batch)
+      .catch((err) => console.error(err))
+      .finally(() => {
+        this.busy = false;
+        this.pendingTranscriptions.delete(job);
+        this.pump();
+      });
     this.pendingTranscriptions.add(job);
-    job.finally(() => this.pendingTranscriptions.delete(job));
+  }
+
+  /** The oldest waiting utterance, joined with the next ones of the same speaker when nobody else spoke in between. */
+  nextBatch() {
+    this.queue.sort((a, b) => a.start - b.start);
+    const first = this.queue.shift();
+    const batch = [first];
+    let seconds = first.end - first.start;
+    for (let i = 0; i < this.queue.length; ) {
+      const next = this.queue[i];
+      if (next.source !== first.source) {
+        i++;
+        continue;
+      }
+      const last = batch[batch.length - 1];
+      const length = next.end - next.start;
+      const otherSpoke = this.spans.some((s) => s.source !== first.source && s.start < next.start && s.end > last.end);
+      if (otherSpoke || next.start - last.end > MERGE_GAP_S || seconds + JOIN_PAUSE_S + length > MERGE_MAX_S) break;
+      batch.push(next);
+      seconds += JOIN_PAUSE_S + length;
+      this.queue.splice(i, 1);
+    }
+    return batch;
+  }
+
+  /** The language this speaker has been speaking (when Whisper hesitates between Italian and English). */
+  preferredLanguage(source) {
+    const count = (list) => list.reduce((m, l) => ((m[l] = (m[l] || 0) + 1), m), {});
+    const pick = (list) => {
+      const c = Object.entries(count(list)).sort((a, b) => b[1] - a[1]);
+      return c.length && c[0][1] >= 2 ? c[0][0] : null;
+    };
+    return pick(this.languages[source] || []) || pick([...this.languages[ME], ...this.languages[THEM]]);
+  }
+
+  async runBatch(batch) {
+    await this.transcriberReady;
+    if (this.transcriberFailed) return;
+    const source = batch[0].source;
+    const pause = new Float32Array(Math.round(JOIN_PAUSE_S * TARGET_RATE));
+    const parts = batch.flatMap((c, i) => (i ? [pause, c.audio] : [c.audio]));
+    const audio = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0;
+    for (const p of parts) {
+      audio.set(p, o);
+      o += p.length;
+    }
+    const seconds = audio.length / TARGET_RATE;
+    const started = Date.now();
+    let result = await this.transcriber.transcribe(audio, this.language, {
+      prefer: this.preferredLanguage(source),
+      prompt: this.glossary,
+    });
+    if (typeof result === "string") result = { text: result };
+    this.stats.batches++;
+    this.stats.joined += batch.length - 1;
+    this.stats.audioS += seconds;
+    this.stats.workMs += result.ms ?? Date.now() - started;
+    const verdict = judgeSegment(result, this.glossary);
+    const text = verdict === "ok" ? cleanTranscription(result.text, result) : "";
+    if (!text) {
+      if (result.text) this.stats.dropped++;
+      return;
+    }
+    if (result.language) {
+      const heard = this.languages[source] || (this.languages[source] = []);
+      heard.push(result.language);
+      if (heard.length > 6) heard.shift();
+    }
+    this.addLine({ t: batch[0].start, speaker: source, text, lang: result.language || null });
+    this.emit("latency", Math.max(0, this.elapsed() - batch[batch.length - 1].end)); // seconds from the end of the speech to its text
   }
 
   addLine(line) {
@@ -103,14 +211,26 @@ export class CallSession {
   tick() {
     if (!this.running) return;
     if (!this.stopping) this.router.checkStale();
-    const backlog = this.pendingTranscriptions.size;
-    if (backlog >= BACKLOG_WARNING && !this.backlogWarned) {
-      this.backlogWarned = true;
-      this.emit("warning", ["backlog", { n: backlog }]);
-    } else if (backlog < 2) {
-      this.backlogWarned = false;
-    }
+    this.checkLag();
     this.checkSharedAudio();
+  }
+
+  /** How far behind the text is: from the end of the oldest speech still waiting for Whisper. */
+  checkLag() {
+    const now = this.elapsed();
+    this.lag = this.queue.length ? Math.max(0, now - Math.min(...this.queue.map((c) => c.end))) : 0;
+    const speed = this.stats.audioS ? this.stats.workMs / 1000 / this.stats.audioS : null; // seconds of work per second of speech
+    this.emit("health", { lag: this.lag, waiting: this.queue.length, busy: this.busy, speed, ...this.stats });
+    if (this.lag > LAG_WARNING_S) {
+      if (this.lateSince === null) this.lateSince = now;
+      if (now - this.lateSince > 10 && !this.lagWarned) {
+        this.lagWarned = true;
+        this.emit("warning", ["slow", { s: Math.round(this.lag) }]);
+      }
+    } else {
+      this.lateSince = null;
+      if (this.lag < 5) this.lagWarned = false;
+    }
   }
 
   checkSharedAudio() {
@@ -147,7 +267,7 @@ export class CallSession {
     if (this.capture) this.capture.stop();
     if (this.replay) this.replay.stop();
     this.router.flushAll();
-    await this.waitFor(() => this.pendingTranscriptions.size === 0, 120000);
+    await this.waitFor(() => !this.busy && this.queue.length === 0, 120000);
     clearInterval(this.timer);
     this.running = false;
     if (this.transcriber) this.transcriber.dispose();

@@ -7,6 +7,8 @@ const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers
 const LANGUAGES = { it: "italian", en: "english" };
 
 let asr = null;
+let core = null; // whisper-core.js: our own decoding on top of the pipeline
+let LogitsProcessor = null;
 let queue = Promise.resolve();
 
 const post = (msg) => self.postMessage(msg);
@@ -22,8 +24,12 @@ async function pickDevice() {
 
 async function load(modelKey) {
   // Workers don't see the page's import map: pass on this file's "?v=" (see web/tools/stamp.mjs).
-  const { MODEL_REPOS, hasManualModel } = await import(`./model-files.js${new URL(import.meta.url).search}`);
-  const { pipeline, env } = await import(TRANSFORMERS_URL);
+  const version = new URL(import.meta.url).search;
+  const { MODEL_REPOS, hasManualModel } = await import(`./model-files.js${version}`);
+  core = await import(`./whisper-core.js${version}`);
+  const transformers = await import(TRANSFORMERS_URL);
+  const { pipeline, env } = transformers;
+  LogitsProcessor = transformers.LogitsProcessor;
   env.allowLocalModels = false;
   // Report which download failed: a bare "Failed to fetch" doesn't say what was blocked.
   env.fetch = async (input, init) => {
@@ -47,8 +53,7 @@ async function load(modelKey) {
   if (await hasManualModel(modelKey)) {
     // Files loaded by hand are the 8-bit ones, which run on the WASM backend.
     asr = await pipeline("automatic-speech-recognition", model, { device: "wasm", dtype: "q8", progress_callback });
-    await asr(new Float32Array(16000), { language: "english", task: "transcribe" }); // warm-up
-    return "wasm, modello caricato a mano";
+    return { device: "wasm, modello caricato a mano", windowMs: await warmUp() };
   }
   let device = await pickDevice();
   try {
@@ -63,24 +68,46 @@ async function load(modelKey) {
     device = "wasm";
     asr = await pipeline("automatic-speech-recognition", model, { device, dtype: "q8", progress_callback });
   }
-  await asr(new Float32Array(16000), { language: "english", task: "transcribe" }); // warm-up
-  return device;
+  return { device, windowMs: await warmUp() };
+}
+
+/** The first run is slow (shaders, buffers): do it before the call needs it. The second one times a window. */
+async function warmUp() {
+  try {
+    await transcribe(new Float32Array(16000), { language: "en" });
+  } catch (err) {
+    // Our own decoding didn't run with this version of the library: fall back to the plain pipeline.
+    console.warn("Whisper: own decoding unavailable, using the plain pipeline.", err);
+    LogitsProcessor = null;
+    await transcribe(new Float32Array(16000), { language: "en" });
+  }
+  const started = Date.now();
+  await transcribe(new Float32Array(16000), { language: "en" });
+  return Date.now() - started;
+}
+
+function transcribe(audio, { language = "auto", prefer = null, prompt = "" } = {}) {
+  if (!LogitsProcessor) {
+    // Older Transformers.js without the hooks: the plain pipeline.
+    const options = { task: "transcribe", chunk_length_s: 30 };
+    if (LANGUAGES[language]) options.language = LANGUAGES[language];
+    return asr(audio, options).then((out) => ({ text: ((out && out.text) || "").trim(), language: LANGUAGES[language] ? language : null }));
+  }
+  return core.transcribeWith(asr, LogitsProcessor, audio, { language, prefer, promptIds: core.promptTokenIds(asr, prompt) });
 }
 
 self.onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "load") {
     load(msg.model).then(
-      (device) => post({ type: "ready", device }),
+      ({ device, windowMs }) => post({ type: "ready", device, windowMs }),
       (err) => post({ type: "error", message: String((err && err.message) || err) }),
     );
   } else if (msg.type === "transcribe") {
     queue = queue.then(async () => {
       try {
-        const options = { task: "transcribe", chunk_length_s: 30 };
-        if (LANGUAGES[msg.language]) options.language = LANGUAGES[msg.language];
-        const out = await asr(msg.audio, options);
-        post({ type: "result", id: msg.id, text: ((out && out.text) || "").trim() });
+        const out = await transcribe(msg.audio, { language: msg.language, prefer: msg.prefer, prompt: msg.prompt });
+        post({ type: "result", id: msg.id, ...out });
       } catch (err) {
         post({ type: "result", id: msg.id, text: "", error: String((err && err.message) || err) });
       }

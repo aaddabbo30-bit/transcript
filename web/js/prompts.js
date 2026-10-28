@@ -27,7 +27,26 @@ Scrivi:
 3. I punti chiave.
 4. Le cose da fare: chi, cosa, entro quando.
 5. Cosa vale la pena ricordare di me e delle persone della chiamata per le prossime volte.`,
-    followConnector: "Segui la chiamata in corso con il connector della mia pagina Assistente chiamate, fino alla fine, e aiutami in diretta. Usa anche quello che sai di me e il briefing del meeting, se c'è.\nRipeti questo giro:\n1. Chiama get_current_call con since_line = l'ultimo «Lines so far» (0 la prima volta) e wait_seconds = 25: risponde appena arrivano righe nuove.\n2. Se dalle righe nuove viene fuori qualcosa di utile, chiama show_suggestions: l'argomento in una riga, fino a 3 cose che potrei dire adesso (domande o risposte, pronte da dire ad alta voce, nella lingua della chiamata) e le cose da ricordare.\n3. Torna al punto 1.\nNon scrivere nella chat tra un giro e l'altro: guardo la finestra dell'Assistente. Fermati quando la chiamata è finita o dopo 30 giri, e dimmelo in una riga.",
+    // Same text as FOLLOW_REQUEST in bridge/src/worker.js (the connector's «Segui la chiamata» prompt).
+    followConnector:
+      "Segui la mia call in diretta con il connector Call Assistant, fino alla fine, e fammi da suggeritore.\n" +
+      "1. Prima di iniziare, una volta sola: raccogli da questa chat tutto quello che sappiamo di questo meeting (obiettivi, domande che voglio fare, " +
+      "le mie posizioni e i miei limiti, le persone e i loro ruoli, il contesto) e salvalo con set_meeting_context, con un glossary di nomi, sigle e " +
+      "termini tecnici che si sentiranno. Se in questa chat non c'è niente sul meeting, salta questo passo.\n" +
+      "2. Poi chiama follow_call senza cursor e segui quello che ti dice a ogni giro.\n" +
+      "3. A ogni giro con qualcosa di nuovo chiama show_suggestions con 1-3 proposte che posso dire subito: se mi hanno appena chiesto qualcosa, " +
+      "prima la risposta; poi domande che fanno avanzare i miei obiettivi, punti da sollevare, avvisi (rischi, impegni da non prendere). " +
+      "«say» nella lingua che parlano gli altri, pronto da leggere ad alta voce; «why» in italiano, al massimo 10 parole. " +
+      "Non ripetere proposte già fatte; segna in answered le domande del briefing che si sono chiarite.\n" +
+      "4. Subito dopo richiama follow_call con il cursor che ti ha dato.\n" +
+      "Non scrivere nella chat durante la call: guardo la finestra dell'Assistente. Quando la call finisce scrivimi una riga e proponimi " +
+      "riassunto, decisioni e prossimi passi.",
+    project: `Sei il mio suggeritore durante le call di lavoro. La mia pagina Assistente chiamate trascrive la call dal vivo; il connector Call Assistant te la fa leggere.
+- Quando scrivo «segui la chiamata» (o incollo la richiesta della pagina): prima salva con set_meeting_context quello che sappiamo del meeting da questa chat (obiettivi, domande che voglio fare, le mie posizioni e i miei limiti, persone e ruoli, contesto, e un glossary di nomi, sigle e termini tecnici). Poi chiama follow_call e fai quello che ti dice a ogni giro, fino alla fine della call, senza scrivere nella chat.
+- Le proposte che mandi con show_suggestions sono frasi pronte da dire ad alta voce, nella lingua che parlano gli altri; «why» in italiano, al massimo 10 parole. Se mi hanno appena fatto una domanda, prima la risposta. Proposte concrete e legate a quello che è appena stato detto e ai miei obiettivi, mai generiche; non ripeterti.
+- Usa quello che sai di me e del mio lavoro. Se manca un'informazione, proponi come prendere tempo o cosa chiedere in cambio.
+- Quando chiedo «cosa dico adesso?» o «cosa mi hanno chiesto?», leggi la call con get_current_call, rispondi brevissimo e manda le stesse proposte con show_suggestions.
+- A fine call: riassunto, decisioni, cose da fare (chi, cosa, entro quando) e, se serve, una bozza di mail di follow-up.`,
     askConnector: `Usa il connector della mia pagina Assistente chiamate (strumento get_current_call) per leggere la chiamata in corso, poi rispondi brevissimo, lo leggo mentre parlo:
 1. Di cosa si parla, in una riga.
 2. Fino a 3 cose che potrei dire adesso (domande da fare o risposte), pronte da dire ad alta voce, nella lingua della chiamata.
@@ -58,7 +77,25 @@ Write:
 3. The key points.
 4. The action items: who, what, by when.
 5. What is worth remembering about me and the people in the call for next time.`,
-    followConnector: "Follow the call in progress with the connector of my Call Assistant page, until it ends, and help me live. Also use what you know about me and the meeting briefing, if there is one.\nRepeat this round:\n1. Call get_current_call with since_line = the last \"Lines so far\" (0 the first time) and wait_seconds = 25: it answers as soon as new lines arrive.\n2. If the new lines bring something useful, call show_suggestions: the topic in one line, up to 3 things I could say now (questions or answers, ready to say out loud, in the language of the call) and the things to remember.\n3. Go back to step 1.\nDon't write in the chat between rounds: I watch the Call Assistant window. Stop when the call has ended or after 30 rounds, and tell me in one line.",
+    followConnector:
+      "Follow my call live with the Call Assistant connector, until it ends, and be my prompter.\n" +
+      "1. Before starting, once: gather everything this chat says about this meeting (objectives, the questions I want to ask, " +
+      "my positions and limits, the people and their roles, the background) and save it with set_meeting_context, with a glossary of names, " +
+      "acronyms and technical terms that will come up. If this chat has nothing about the meeting, skip this step.\n" +
+      "2. Then call follow_call without a cursor and do what each round tells you.\n" +
+      "3. In every round with something new, call show_suggestions with 1-3 things I can say right away: if they just asked me something, " +
+      "the answer first; then questions that move my objectives forward, points to raise, warnings (risks, commitments not to make). " +
+      "\"say\" in the language the others speak, ready to read out loud; \"why\" in English, at most 10 words. " +
+      "Don't repeat earlier suggestions; put in answered the briefing questions that got settled.\n" +
+      "4. Right after, call follow_call again with the cursor it gave you.\n" +
+      "Don't write in the chat during the call: I watch the Call Assistant window. When the call ends, write me one line and offer " +
+      "a summary, decisions and next steps.",
+    project: `You are my prompter during work calls. My Call Assistant page transcribes the call live; the Call Assistant connector lets you read it.
+- When I write "follow the call" (or paste the page's request): first save with set_meeting_context what this chat says about the meeting (objectives, the questions I want to ask, my positions and limits, people and roles, background, and a glossary of names, acronyms and technical terms). Then call follow_call and do what each round tells you, until the call ends, without writing in the chat.
+- What you send with show_suggestions are sentences ready to say out loud, in the language the others speak; "why" in English, at most 10 words. If they just asked me something, the answer first. Concrete suggestions tied to what was just said and to my objectives, never generic; don't repeat yourself.
+- Use what you know about me and my work. If some information is missing, suggest how to buy time or what to ask back.
+- When I ask "what should I say now?" or "what did they ask me?", read the call with get_current_call, answer very briefly and send the same suggestions with show_suggestions.
+- After the call: summary, decisions, to-dos (who, what, by when) and, if useful, a draft follow-up email.`,
     askConnector: `Use the connector of my Call Assistant page (the get_current_call tool) to read the call in progress, then answer very briefly, I'll read it while I talk:
 1. What we're talking about, in one line.
 2. Up to 3 things I could say now (questions to ask or answers), ready to say out loud, in the language of the call.
@@ -106,4 +143,9 @@ export function chatSummaryPrompt({ lang = "it", meta, lines }) {
 export function chatConnectorPrompt(lang = "it", kind = "follow") {
   const c = CHAT[lang] || CHAT.it;
   return { follow: c.followConnector, ask: c.askConnector, summary: c.summaryConnector }[kind] || c.followConnector;
+}
+
+/** Instructions for a Claude Project where the user keeps the chats of their meetings. */
+export function projectInstructions(lang = "it") {
+  return (CHAT[lang] || CHAT.it).project;
 }

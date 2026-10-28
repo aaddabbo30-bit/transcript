@@ -2,6 +2,8 @@
 // and an utterance segmenter that cuts the stream at pauses.
 // Same algorithm as call_assistant/audio.py in the desktop app.
 
+import { EchoDetector } from "./echo.js";
+
 export const TARGET_RATE = 16000;
 export const ME = "me"; // the user's microphone
 export const THEM = "them"; // the shared tab/screen audio: the other people, or a video
@@ -220,11 +222,17 @@ export class Segmenter {
   }
 }
 
-/** Segments each source separately; closes utterances when a source goes quiet. */
+/**
+ * Segments each source separately; closes utterances when a source goes quiet.
+ * Microphone utterances that are only the call heard from the speakers (see
+ * echo.js) go to onEcho instead of onChunk.
+ */
 export class AudioRouter {
-  constructor(onChunk, clock) {
+  constructor(onChunk, clock, { onEcho = () => {}, echo = new EchoDetector() } = {}) {
     this.onChunk = onChunk;
+    this.onEcho = onEcho;
     this.clock = clock; // session time in seconds
+    this.echo = echo;
     this.segmenters = new Map();
     this.levels = {};
     this.lastFeed = {};
@@ -240,8 +248,14 @@ export class AudioRouter {
     if (samples16k.length) {
       this.levels[source] = rms(samples16k);
       this.lastFeed[source] = tArrival;
+      if (source === THEM && this.echo) this.echo.addReference(samples16k, tStart);
     }
-    for (const chunk of seg.push(samples16k, tStart)) this.onChunk(chunk);
+    for (const chunk of seg.push(samples16k, tStart)) this.route(chunk);
+  }
+
+  route(chunk) {
+    if (chunk.source === ME && this.echo && this.echo.isEcho(chunk)) this.onEcho(chunk);
+    else this.onChunk(chunk);
   }
 
   checkStale(maxGap = 0.9) {
@@ -249,7 +263,7 @@ export class AudioRouter {
     for (const seg of this.segmenters.values()) {
       if (seg.inSpeech && now - seg.lastAudioTime > maxGap) {
         const chunk = seg.flush();
-        if (chunk) this.onChunk(chunk);
+        if (chunk) this.route(chunk);
       }
     }
   }
@@ -257,7 +271,7 @@ export class AudioRouter {
   flushAll() {
     for (const seg of this.segmenters.values()) {
       const chunk = seg.flush();
-      if (chunk) this.onChunk(chunk);
+      if (chunk) this.route(chunk);
     }
   }
 }

@@ -290,39 +290,59 @@ await step("app served by its bridge: connected by itself, last step in the Call
   // One click: the request to follow the call, ready to paste in Claude's chat.
   assert.equal((await page.textContent("#ask-claude")).trim(), "Fai seguire a Claude ↗");
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
-  assert.match(await clipboard(page), /^Segui la chiamata in corso con il connector della mia pagina[\s\S]*get_current_call[\s\S]*show_suggestions/);
+  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant[\s\S]*set_meeting_context[\s\S]*follow_call[\s\S]*show_suggestions/);
   assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat di Claude/);
-  // The meeting briefing (from the user's Cockpit artifact, or from Claude): its title shows above the suggestions.
+  // The meeting briefing (from the user's Cockpit artifact, or from Claude): its title and questions show above the suggestions.
   assert.ok(await page.isHidden("#meeting"));
+  assert.match(await page.textContent("#follow-state"), /^○ Claude non sta seguendo la call/);
   const briefing = await mcp(connector, "tools/call", {
     name: "set_meeting_context",
-    arguments: { title: "Offerta Milano", goal: "Chiudere la data di inizio", objectives: ["Data di inizio"], questions: ["Chi paga il trasloco?"] },
+    arguments: {
+      title: "Offerta Milano",
+      goal: "Chiudere la data di inizio",
+      objectives: ["Data di inizio"],
+      questions: ["Chi paga il trasloco?", "Quando si inizia?"],
+      glossary: ["Giulia", "Navigli"],
+    },
   }, appEnv);
-  assert.match(briefing.content[0].text, /^Briefing saved for «Offerta Milano»/);
+  assert.match(briefing.content[0].text, /^Briefing saved for «Offerta Milano»: 1 objectives, 2 questions, 2 glossary terms/);
   await page.waitForSelector("#meeting:not(.hidden)", { timeout: 15000 });
   assert.equal(await page.textContent("#meeting-title"), "Offerta Milano");
   assert.equal(await page.textContent("#meeting-goal"), "· Chiudere la data di inizio");
-  assert.match(await readBridge(connector, "get_current_call", {}, appEnv), /^Meeting briefing, written by the user[\s\S]*Questions to close:\n- Chi paga il trasloco\?[\s\S]*Status: in progress/);
+  assert.equal(await page.textContent("#questions-count"), "2 aperte su 2");
+  // Claude follows the call: its first round has the briefing and the call so far; the page shows it is following.
+  const round = await readBridge(connector, "follow_call", {}, appEnv);
+  assert.match(round, /^Round 1 · call time [\s\S]*Questions the user wants to ask or settle:\n- Chi paga il trasloco\?[\s\S]*How to follow, every round:/);
+  await page.waitForFunction(() => /^● Claude segue la call · giro 1 · \d+ s fa$/.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
   const shown = await mcp(connector, "tools/call", {
     name: "show_suggestions",
     arguments: {
       topic: "Giulia ha un'offerta di lavoro a Milano",
       suggestions: [
-        { kind: "question", text: "Quando dovresti iniziare?" },
-        { kind: "answer", text: "Secondo me è un'ottima occasione." },
+        { kind: "question", say: "Quando dovresti iniziare?", why: "serve la data per decidere" },
+        { kind: "warning", say: "Non promettere una risposta entro oggi.", why: "prima parlane con Luca" },
       ],
       remember: ["Decidere entro venerdì"],
+      answered: ["Chi paga il trasloco?"],
     },
   }, appEnv);
-  assert.match(shown.content[0].text, /^Shown in the Call Assistant window/);
+  assert.match(shown.content[0].text, /^Shown in the Call Assistant window, next to the transcript\. Next: call follow_call with cursor=\d+\.$/);
   await page.waitForFunction(() => document.querySelectorAll("#suggestions .suggestion").length === 2, null, { timeout: 15000 });
   assert.equal(await page.textContent("#sug-topic"), "Giulia ha un'offerta di lavoro a Milano");
-  assert.match(await page.textContent("#suggestions .suggestion >> nth=0"), /^DomandaQuando dovresti iniziare\?$/);
+  assert.equal(await page.textContent("#suggestions .suggestion >> nth=0"), "DomandaQuando dovresti iniziare?serve la data per decidere");
+  assert.match(await page.textContent("#suggestions .suggestion >> nth=1"), /^Attenzione/);
   assert.equal(await page.textContent("#remember"), "Decidere entro venerdì");
   assert.match(await page.textContent("#sug-time"), /^aggiornati alle /);
-  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-suggestions.png"), clip: { x: 0, y: 0, width: 1200, height: 640 } });
+  // The answered question is ticked, and listed after the open one.
+  await page.waitForFunction(() => document.querySelector("#questions-count").textContent === "1 aperte su 2", null, { timeout: 15000 });
+  assert.deepEqual(await page.$$eval("#questions li", (lis) => lis.map((li) => [li.textContent, li.className])), [["Quando si inizia?", ""], ["Chi paga il trasloco?", "done"]]);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-suggestions.png"), clip: { x: 0, y: 0, width: 1200, height: 700 } });
   await page.click("#suggestions .suggestion >> nth=0");
   assert.equal(await clipboard(page), "Quando dovresti iniziare?");
+  // The next set replaces it; the earlier ones stay below, one click away.
+  await mcp(connector, "tools/call", { name: "show_suggestions", arguments: { suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] } }, appEnv);
+  await page.waitForFunction(() => document.querySelectorAll("#previous div").length === 2, null, { timeout: 15000 });
+  assert.equal(await page.textContent("#previous div >> nth=0"), "Domanda · Quando dovresti iniziare?");
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
   assert.match(await page.textContent("#ended-hint"), /Claude ha tutta la chiamata/);
@@ -360,7 +380,7 @@ await step("bridge at another address (e.g. the app on GitHub Pages): connect it
   await page.waitForSelector("#bridge-state.ok");
   // «Let Claude follow» copies only the request: Claude reads the call itself.
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
-  assert.match(await clipboard(page), /^Segui la chiamata in corso con il connector della mia pagina Assistente chiamate/);
+  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant/);
 
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });

@@ -1,5 +1,7 @@
 // Page-side wrapper of the Whisper worker, plus a scripted stand-in for tests.
 
+import { LANGS } from "./whisper-core.js";
+
 export class WhisperTranscriber {
   constructor({ model = "base", onProgress = () => {} } = {}) {
     this.model = model;
@@ -21,6 +23,7 @@ export class WhisperTranscriber {
         if (msg.type === "progress") this.onProgress(msg.percent);
         else if (msg.type === "ready") {
           this.device = msg.device;
+          this.windowMs = msg.windowMs || null; // time for one 30 s window, measured at load
           resolve(msg.device);
         } else if (msg.type === "error") {
           const err = new Error(msg.message);
@@ -34,7 +37,7 @@ export class WhisperTranscriber {
         else if (msg.type === "result") {
           const done = this.waiting.get(msg.id);
           this.waiting.delete(msg.id);
-          if (done) done(msg.error ? "" : msg.text);
+          if (done) done(msg.error ? { text: "", error: msg.error } : msg);
         }
       };
       this.worker.onerror = (e) => reject(new Error(e.message || "worker error"));
@@ -43,12 +46,15 @@ export class WhisperTranscriber {
     return this.loading;
   }
 
-  /** Resolves with the text ("" on failure). Chunks are transcribed in order. */
-  transcribe(audio, languageMode) {
+  /**
+   * Resolves with {text, language, noSpeechProb, avgLogprob, ms} (text "" on failure).
+   * options: prefer (the language of this speaker so far), prompt (the meeting's names and terms).
+   */
+  transcribe(audio, languageMode, { prefer = null, prompt = "" } = {}) {
     const id = this.nextId++;
     return new Promise((resolve) => {
       this.waiting.set(id, resolve);
-      this.worker.postMessage({ type: "transcribe", id, audio, language: languageMode }, [audio.buffer]);
+      this.worker.postMessage({ type: "transcribe", id, audio, language: languageMode, prefer, prompt }, [audio.buffer]);
     });
   }
 
@@ -58,12 +64,15 @@ export class WhisperTranscriber {
 
   dispose() {
     if (this.worker) this.worker.terminate();
-    for (const done of this.waiting.values()) done("");
+    for (const done of this.waiting.values()) done({ text: "" });
     this.waiting.clear();
   }
 }
 
-/** Test double: returns the given texts in order, after a short delay. */
+/**
+ * Test double: returns the given texts in order (a string, or a full result
+ * such as {text, noSpeechProb, avgLogprob}), after a delay.
+ */
 export class ScriptedTranscriber {
   constructor(texts = [], delayMs = 20) {
     this.texts = [...texts];
@@ -71,16 +80,19 @@ export class ScriptedTranscriber {
     this.calls = [];
     this.pending = 0;
     this.device = "scripted";
+    this.windowMs = delayMs;
   }
   async load() {
     return "scripted";
   }
-  async transcribe(audio, languageMode) {
+  async transcribe(audio, languageMode, options = {}) {
     this.pending++;
-    this.calls.push({ seconds: audio.length / 16000, languageMode });
-    await new Promise((r) => setTimeout(r, this.delayMs));
+    this.calls.push({ seconds: audio.length / 16000, languageMode, ...options });
+    await new Promise((r) => setTimeout(r, typeof this.delayMs === "function" ? this.delayMs(audio) : this.delayMs));
     this.pending--;
-    return this.texts.length ? this.texts.shift() : `frase di prova ${this.calls.length}`;
+    const next = this.texts.length ? this.texts.shift() : `frase di prova ${this.calls.length}`;
+    const result = typeof next === "string" ? { text: next } : { ...next };
+    return { language: LANGS.includes(languageMode) ? languageMode : "it", noSpeechProb: 0, avgLogprob: -0.2, ...result };
   }
   dispose() {}
 }
