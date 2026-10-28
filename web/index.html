@@ -7,14 +7,13 @@
   <meta name="description" content="Assistente per chiamate e video: trascrive nel browser con Whisper e Claude legge la chiamata dalla tua chat.">
   <link rel="icon" href="assets/icon.png">
   <!-- stamp:start -->
-  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=263eb84c08","./js/audio-worklet.js":"./js/audio-worklet.js?v=263eb84c08","./js/audio.js":"./js/audio.js?v=263eb84c08","./js/bridge.js":"./js/bridge.js?v=263eb84c08","./js/echo.js":"./js/echo.js?v=263eb84c08","./js/history.js":"./js/history.js?v=263eb84c08","./js/i18n.js":"./js/i18n.js?v=263eb84c08","./js/model-files.js":"./js/model-files.js?v=263eb84c08","./js/prompts.js":"./js/prompts.js?v=263eb84c08","./js/segmenter.js":"./js/segmenter.js?v=263eb84c08","./js/session.js":"./js/session.js?v=263eb84c08","./js/transcriber.js":"./js/transcriber.js?v=263eb84c08","./js/transcript.js":"./js/transcript.js?v=263eb84c08","./js/whisper-core.js":"./js/whisper-core.js?v=263eb84c08","./js/whisper-worker.js":"./js/whisper-worker.js?v=263eb84c08"}}</script>
-  <link rel="stylesheet" href="css/app.css?v=263eb84c08">
-  <script type="module" src="js/app.js?v=263eb84c08"></script>
+  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=f9d9f7c81d","./js/audio-worklet.js":"./js/audio-worklet.js?v=f9d9f7c81d","./js/audio.js":"./js/audio.js?v=f9d9f7c81d","./js/bridge.js":"./js/bridge.js?v=f9d9f7c81d","./js/echo.js":"./js/echo.js?v=f9d9f7c81d","./js/history.js":"./js/history.js?v=f9d9f7c81d","./js/i18n.js":"./js/i18n.js?v=f9d9f7c81d","./js/model-files.js":"./js/model-files.js?v=f9d9f7c81d","./js/prompts.js":"./js/prompts.js?v=f9d9f7c81d","./js/script.js":"./js/script.js?v=f9d9f7c81d","./js/segmenter.js":"./js/segmenter.js?v=f9d9f7c81d","./js/session.js":"./js/session.js?v=f9d9f7c81d","./js/transcriber.js":"./js/transcriber.js?v=f9d9f7c81d","./js/transcript.js":"./js/transcript.js?v=f9d9f7c81d","./js/whisper-core.js":"./js/whisper-core.js?v=f9d9f7c81d","./js/whisper-worker.js":"./js/whisper-worker.js?v=f9d9f7c81d"}}</script>
+  <link rel="stylesheet" href="css/app.css?v=f9d9f7c81d">
+  <script type="module" src="js/app.js?v=f9d9f7c81d"></script>
   <!-- stamp:end -->
 </head>
 <body>
   <header class="topbar">
-    <span class="wordmark" data-t="app_title">Assistente chiamate</span>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="call" class="active" data-t="tab_call">Chiamata</button>
       <button role="tab" data-tab="history" data-t="tab_history">Archivio</button>
@@ -81,11 +80,12 @@
         <p id="audio-info" class="audio-info"></p>
         <p id="live-hint" class="live-hint"></p>
         <div id="live-body" class="live-body">
-          <section id="claude-col" class="claude-col hidden" aria-live="polite">
+          <section id="claude-col" class="claude-col hidden">
             <p id="follow-state" class="follow-state"></p>
-            <div id="meeting" class="meeting hidden"><strong id="meeting-title"></strong> <span id="meeting-goal" class="muted"></span></div>
-            <div id="now" class="now">
-              <div class="now-head"><span id="sug-topic" class="topic waiting"></span><span id="sug-time" class="sug-time"></span></div>
+            <div id="meeting" class="meeting hidden"><strong id="meeting-title"></strong><span id="meeting-goal"></span></div>
+            <!-- The latest suggestions: they stay in view while the script below scrolls. -->
+            <div id="now" class="now" aria-live="polite">
+              <div class="now-head"><span class="now-label" data-t="sec_now">Adesso</span><span id="sug-topic" class="topic waiting"></span><span id="sug-time" class="sug-time"></span></div>
               <div id="suggestions" class="suggestions"></div>
             </div>
             <details id="questions-box" class="fold hidden" open>
@@ -96,10 +96,15 @@
               <summary><span data-t="sec_remember"></span></summary>
               <ul id="remember" class="remember"></ul>
             </details>
-            <details id="previous-box" class="fold hidden">
-              <summary><span data-t="sec_previous"></span></summary>
-              <div id="previous" class="previous"></div>
-            </details>
+            <!-- Every suggestion of this call, newest first: nothing disappears. -->
+            <section id="script-box" class="script hidden">
+              <div class="script-head">
+                <h3 data-t="sec_script">Il copione</h3>
+                <div id="script-filter" class="filters" role="group"></div>
+              </div>
+              <div id="pinned" class="pinned hidden"></div>
+              <div id="script" class="script-list"></div>
+            </section>
           </section>
           <section class="transcript-col">
             <div class="col-head"><span data-t="sec_transcript"></span></div>
@@ -120,6 +125,10 @@
           <button id="new-call" class="ghost" data-t="btn_new_call"></button>
         </div>
         <p id="summary-claude-status" class="notice hidden"></p>
+        <details id="ended-script-box" class="fold ended-script hidden" open>
+          <summary><span data-t="sec_script_ended"></span><span id="ended-script-count" class="count"></span></summary>
+          <div id="ended-script" class="script-list"></div>
+        </details>
       </div>
     </section>
 

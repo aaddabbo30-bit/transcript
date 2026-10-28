@@ -20,6 +20,7 @@ const KEY = /^[A-Za-z0-9_-]{24,128}$/;
 const KEEP_MS = 48 * 3600 * 1000;
 const KEEP_CALLS = 10;
 const KEEP_CONTEXT_MS = 14 * 24 * 3600 * 1000; // a briefing may be written days before the meeting
+const PREPARED_MS = 12 * 3600 * 1000; // a briefing saved with no call running is for a call starting within this
 const STALE_S = 120;
 const MAX_BODY = 2_000_000;
 const MAX_LINES = 20000;
@@ -487,6 +488,27 @@ export function glossaryOf(ctx) {
   return out.slice(0, 40);
 }
 
+const startOf = (call) => {
+  const t = Date.parse(call.startedAt);
+  return Number.isFinite(t) ? t : (call.updatedAt ?? Date.now());
+};
+
+/**
+ * The briefing that belongs to this call: saved while it ran, or prepared
+ * before it started (and not yet used by another call). With no call, only a
+ * briefing waiting for the next one. A new call never inherits the last one's.
+ */
+export function briefingFor(ctx, call) {
+  if (!ctx) return null;
+  if (!call) return ctx.callId ? null : ctx;
+  if (ctx.callId) return ctx.callId === call.id ? ctx : null;
+  const start = startOf(call);
+  return ctx.updatedAt >= start - PREPARED_MS && ctx.updatedAt <= start + 60_000 ? ctx : null;
+}
+
+/** The call in progress: not ended, and the page still sending. */
+const liveCall = (calls, now) => calls.find((c) => c.status === "live" && (now - c.updatedAt) / 1000 <= STALE_S) || null;
+
 async function saveContext(db, room, ctx, now) {
   await db
     .prepare(
@@ -528,10 +550,10 @@ export function describeContext(ctx) {
   return `${out.join("\n")}\n\n`;
 }
 
-/** Record briefing items Claude reports as answered (show_suggestions' "answered"). */
-async function markAnswered(db, room, answered, now) {
+/** Record briefing items Claude reports as answered (show_suggestions' "answered"), on this call's briefing. */
+async function markAnswered(db, room, answered, now, call) {
   if (!answered.length) return;
-  const ctx = await loadContext(db, room, now);
+  const ctx = briefingFor(await loadContext(db, room, now), call);
   if (!ctx) return;
   const { updatedAt, ...data } = ctx;
   data.answered = [...new Set([...(data.answered || []), ...answered.map(plain).filter(Boolean)])].slice(-40);
@@ -638,12 +660,20 @@ async function followRound(args, ctx) {
   const cursor = given ? Math.max(0, Number(args.cursor)) : 0;
   let calls = await loadCalls(db, room, Date.now());
   const prev = await loadFollow(db, room);
+  // The call to follow: the one in progress, or the one these rounds were following (to report its end).
+  // A call that ended before Claude was asked to follow is not it: Claude waits for the new one.
+  const followed = (list) => {
+    const call = list[0];
+    if (!call) return null;
+    if (call.status === "live" && (Date.now() - call.updatedAt) / 1000 <= STALE_S) return call;
+    return given && prev && prev.callId === call.id ? call : null;
+  };
   if (given) {
     // Wait for new lines: at once when the others ask a question, else after a few lines or a few seconds.
     const until = Date.now() + waitS * 1000;
     let firstSeen = null;
     while (Date.now() < until) {
-      const call = calls[0];
+      const call = followed(calls);
       if (call && (call.status === "ended" || (Date.now() - call.updatedAt) / 1000 > STALE_S)) break;
       if (call && prev && prev.callId !== call.id) break; // a new call started
       const fresh = call ? newLines(call, cursor) : [];
@@ -657,7 +687,7 @@ async function followRound(args, ctx) {
     }
   }
   const now = Date.now();
-  const call = calls[0] || null;
+  const call = followed(calls);
   const callId = call ? call.id : null;
   const sameCall = Boolean(given && prev && prev.callId === callId);
   const rounds = sameCall ? prev.rounds + 1 : 1;
@@ -685,7 +715,7 @@ async function followRound(args, ctx) {
       "or the computer may be asleep. Stop following and tell the user in one line to check the page; then they can ask you again."
     );
   }
-  const briefing = await loadContext(db, room, now);
+  const briefing = briefingFor(await loadContext(db, room, now), call);
   const others = othersLanguage(call);
   const user = LANG_NAMES[call.ui] || "Italian";
   const out = [];
@@ -777,7 +807,7 @@ async function callTool(name, args, ctx) {
       await sleep(Math.min(WAIT_POLL_MS, until - Date.now()));
       calls = await loadCalls(db, room, Date.now());
     }
-    const briefing = describeContext(await loadContext(db, room, now));
+    const briefing = describeContext(briefingFor(await loadContext(db, room, now), calls[0] || null));
     if (!calls.length) return toolText(briefing + noCalls(app));
     return toolText(briefing + describeCall(calls[0], minutesArg(args.minutes, 10), Date.now(), app, since));
   }
@@ -785,15 +815,20 @@ async function callTool(name, args, ctx) {
   if (name === "set_meeting_context") {
     const ctx = cleanContext(args);
     if (!ctx) return toolText("Nothing to save: give at least a title, a goal or some background.", true);
-    // Questions Claude already reported answered stay answered if they are still in the new briefing.
+    // It belongs to the call in progress; with none, to the next call the user starts.
+    const live = liveCall(calls, now);
+    ctx.callId = live ? live.id : null;
+    // Questions Claude already reported answered stay answered if they are still in the new briefing of the same call.
     const before = await loadContext(db, room, now);
     const items = [...ctx.objectives, ...ctx.questions];
-    ctx.answered = before ? before.answered.filter((a) => items.some((i) => itemDone(i, [a]))) : [];
+    ctx.answered = before && before.callId === ctx.callId ? before.answered.filter((a) => items.some((i) => itemDone(i, [a]))) : [];
     await saveContext(db, room, ctx, Date.now());
     const terms = glossaryOf(ctx);
     return toolText(
       `Briefing saved${ctx.title ? ` for «${ctx.title}»` : ""}: ${ctx.objectives.length} objectives, ${ctx.questions.length} questions` +
-        `${terms.length ? `, ${terms.length} glossary terms for the transcription` : ""}. follow_call and get_current_call show it with the transcript.`,
+        `${terms.length ? `, ${terms.length} glossary terms for the transcription` : ""}, ` +
+        `${live ? "for the call in progress" : "for the next call the user starts (within 12 hours)"}. ` +
+        "follow_call and get_current_call show it with the transcript.",
     );
   }
   if (name === "show_suggestions") {
@@ -801,7 +836,7 @@ async function callTool(name, args, ctx) {
     if (!data) return toolText("Nothing to show: give at least one suggestion with kind and say.", true);
     const call = calls[0];
     await saveSuggestions(db, room, call ? call.id : null, data, Date.now());
-    await markAnswered(db, room, data.answered, now);
+    await markAnswered(db, room, data.answered, now, call || null);
     if (!call) return toolText(`Saved, but there is no call to show it next to.${app ? ` The user starts one at ${app}.` : ""}`);
     if (call.status === "ended") {
       return toolText(`Saved with call ${call.id}, which has ended: the user sees it if that call is still open in the Call Assistant.`);
@@ -824,7 +859,7 @@ async function getPrompt(name, ctx) {
   if (!prompt) return null;
   const { db, room, now, app } = ctx;
   const [call] = await loadCalls(db, room, now);
-  const briefing = describeContext(await loadContext(db, room, now));
+  const briefing = describeContext(briefingFor(await loadContext(db, room, now), call || null));
   const transcript = briefing + (call ? describeCall(call, prompt.minutes, now, app) : noCalls(app));
   return {
     description: prompt.description,
@@ -923,11 +958,17 @@ async function api(request, env, key, action) {
     return json({ ok: true, calls: calls.length });
   }
   if (action === "suggestions" && request.method === "GET") {
+    // ?call=<id>: what belongs to the page's own call (older pages leave it out: the latest call).
+    const id = new URL(request.url).searchParams.get("call");
+    const calls = await loadCalls(db, room, now);
+    const call = id ? calls.find((c) => c.id === id) || { id, startedAt: id, updatedAt: now } : calls[0] || null;
+    const suggestions = await loadSuggestions(db, room);
+    const follow = await loadFollow(db, room);
     return json({
       ok: true,
-      suggestions: await loadSuggestions(db, room),
-      meeting: meetingOf(await loadContext(db, room, now)),
-      follow: await loadFollow(db, room),
+      suggestions: !id || (suggestions && suggestions.callId === id) ? suggestions : null,
+      meeting: meetingOf(briefingFor(await loadContext(db, room, now), call)),
+      follow: !id || (follow && follow.callId === id) ? follow : null,
     });
   }
   if (request.method !== "POST") return json({ ok: false, error: "method" }, 405);
@@ -940,13 +981,20 @@ async function api(request, env, key, action) {
     }
     if (!call) return json({ ok: false, error: "bad_call" }, 400);
     await saveCall(db, room, call, now);
+    // A briefing prepared for the next call becomes this call's (so the call after it doesn't get it).
+    const ctx = await loadContext(db, room, now);
+    const briefing = briefingFor(ctx, call);
+    if (briefing && !briefing.callId) {
+      const { updatedAt, ...data } = briefing;
+      await saveContext(db, room, { ...data, callId: call.id }, updatedAt);
+    }
     // The answer brings back what Claude asked to show for this call, if anything.
     const suggestions = await loadSuggestions(db, room);
     const follow = await loadFollow(db, room);
     return json({
       ok: true,
       suggestions: suggestions && suggestions.callId === call.id ? suggestions : null,
-      meeting: meetingOf(await loadContext(db, room, now)),
+      meeting: meetingOf(briefing),
       follow: follow && follow.callId === call.id ? follow : null,
     });
   }

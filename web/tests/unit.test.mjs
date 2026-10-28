@@ -7,6 +7,7 @@ import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOrig
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, chatTranscript, projectInstructions } from "../js/prompts.js";
 import { followRequest } from "../../bridge/src/worker.js";
 import { EchoDetector } from "../js/echo.js";
+import { SuggestionScript } from "../js/script.js";
 import { AudioRouter, Segmenter, TARGET_RATE, resample } from "../js/segmenter.js";
 import { CallSession, TranscriptReplay } from "../js/session.js";
 import { ScriptedTranscriber } from "../js/transcriber.js";
@@ -527,4 +528,32 @@ test("the request to follow the call is the connector's own, and a Project's ins
   assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*set_meeting_context[\s\S]*merged[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
   assert.match(projectInstructions("it"), /follow_call senza cursor[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
   assert.match(projectInstructions("en"), /^You are my prompter/);
+});
+
+test("the script of a call keeps every suggestion: newest first, by arrival, filtered, pinned, said-again ones once", () => {
+  const sc = new SuggestionScript();
+  assert.equal(sc.add({ updatedAt: 1000, topic: "Budget", suggestions: [{ kind: "question", say: "Chi paga?" }, { kind: "answer", say: "Sì, entro venerdì.", why: "ti hanno chiesto la data" }] }), true);
+  assert.equal(sc.add({ updatedAt: 1000, topic: "Budget", suggestions: [{ kind: "question", say: "Chi paga?" }] }), false); // the same set again
+  sc.add({ updatedAt: 2000, topic: "Licenze", suggestions: [{ kind: "warning", say: "Non promettere lo sconto." }, { kind: "question", say: "chi paga?" }, { kind: "boh", text: "Riassumi i punti." }] });
+  // "Now" shows the latest set; the script lists the others ("Chi paga?", said again, is in "now" for the moment).
+  assert.deepEqual(sc.groups().map((g) => [g.at, g.topic, g.items.map((x) => x.say)]), [[1000, "Budget", ["Sì, entro venerdì."]]]);
+  // A filter shows all of that kind, the latest set included.
+  assert.deepEqual(sc.groups("warning").map((g) => g.items.map((x) => x.say)), [["Non promettere lo sconto."]]);
+  assert.deepEqual(sc.counts(), { all: 4, answer: 1, question: 1, point: 1, warning: 1 });
+  sc.add({ updatedAt: 3000, topic: "Chiusura", suggestions: [{ kind: "point", say: "Fissiamo la prossima call." }] });
+  // Once a newer set arrives, it is back in the script, where it first came (a suggestion said again is listed once).
+  assert.deepEqual(sc.groups().map((g) => [g.at, g.items.map((x) => x.say)]), [[2000, ["Non promettere lo sconto.", "Riassumi i punti."]], [1000, ["Chi paga?", "Sì, entro venerdì."]]]);
+  const key = sc.items.find((x) => x.say === "Chi paga?").key;
+  sc.togglePin(key);
+  assert.deepEqual(sc.pinnedItems().map((x) => x.say), ["Chi paga?"]);
+  sc.togglePin(key);
+  assert.equal(sc.pinnedItems().length, 0);
+  // What the history keeps, and read back after the call.
+  const saved = JSON.parse(JSON.stringify(sc));
+  assert.equal(saved.length, 5);
+  assert.deepEqual(new SuggestionScript(saved).groups().map((g) => g.at), [3000, 2000, 1000]);
+  // A page opened mid-call: the bridge's earlier suggestions come first, as older.
+  const late = new SuggestionScript();
+  late.add({ updatedAt: 5000, suggestions: [{ kind: "answer", say: "Ok." }], previous: [{ kind: "question", say: "Prima?" }] });
+  assert.deepEqual(late.groups().map((g) => [g.at, g.items.map((x) => x.say)]), [[4999, ["Prima?"]]]);
 });

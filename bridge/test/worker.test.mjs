@@ -433,3 +433,59 @@ test("briefing helpers: done items, glossary for the transcription", () => {
   assert.deepEqual(glossaryOf({ people: "Jan (MATLAB), Jaromir, Claudia – PM", title: "X-13 on RPP", glossary: ["ARIMA"] }), ["ARIMA", "Jan", "MATLAB", "Jaromir", "Claudia", "X-13", "RPP"]);
   assert.deepEqual(glossaryOf(null), []);
 });
+
+test("each call has its own briefing: prepared for the next call, or saved during it; never the last call's", async (t) => {
+  const b = bridge();
+  let now = Date.parse("2026-10-28T09:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const iso = (ms) => new Date(ms).toISOString();
+  const meetingFor = async (id) => (await b.call("GET", `/api/${KEY}/suggestions?call=${encodeURIComponent(id)}`)).data.meeting;
+
+  // Prepared at 9:00 (e.g. in the Cockpit), with no call running: it waits for the next call.
+  assert.match((await b.tool("set_meeting_context", { title: "Budget", questions: ["Chi paga?"] })).text, /for the next call the user starts/);
+  now += 3600 * 1000;
+  const a = iso(now);
+  const first = await b.call("POST", `/api/${KEY}/call`, { id: a, startedAt: a, status: "live", lines: heard([["them", "Ciao."]]) });
+  assert.equal(first.data.meeting.title, "Budget");
+  assert.equal((await meetingFor(a)).title, "Budget");
+  await b.tool("show_suggestions", { suggestions: [{ kind: "question", say: "Chi paga?" }], answered: ["Chi paga?"] });
+  await b.call("POST", `/api/${KEY}/call`, { id: a, startedAt: a, status: "ended", lines: heard([["them", "Ciao."]]) });
+
+  // Next call, two hours later: nothing of the Budget meeting.
+  now += 2 * 3600 * 1000;
+  const c = iso(now);
+  const second = await b.call("POST", `/api/${KEY}/call`, { id: c, startedAt: c, status: "live", lines: heard([["them", "Hello."]]) });
+  assert.equal(second.data.meeting, null);
+  assert.equal(await meetingFor(c), null);
+  assert.match((await b.tool("follow_call")).text, /No meeting briefing saved yet\./);
+  assert.doesNotMatch((await b.tool("get_current_call")).text, /Budget/);
+  // Saved during it: it is this call's, with nothing answered yet.
+  assert.match((await b.tool("set_meeting_context", { title: "Fornitore", questions: ["Chi paga?"] })).text, /for the call in progress/);
+  const mine = await meetingFor(c);
+  assert.equal(mine.title, "Fornitore");
+  assert.deepEqual(mine.questions, [{ text: "Chi paga?", done: false }]);
+  // The first call's page (if still open) doesn't get it.
+  assert.equal(await meetingFor(a), null);
+  await b.call("POST", `/api/${KEY}/call`, { id: c, startedAt: c, status: "ended", lines: heard([["them", "Hello."]]) });
+
+  // Prepared after that call ended: for the next one, not the old one.
+  now += 600 * 1000;
+  await b.tool("set_meeting_context", { title: "Colloquio" });
+  assert.doesNotMatch((await b.tool("get_current_call")).text, /Colloquio/); // the latest call is the ended one
+  now += 600 * 1000;
+  const d = iso(now);
+  assert.equal((await b.call("POST", `/api/${KEY}/call`, { id: d, startedAt: d, status: "live", lines: [] })).data.meeting.title, "Colloquio");
+});
+
+test("follow_call asked before Start: the last call, ended or left open, is not followed; Claude waits for the new one", async (t) => {
+  const b = bridge();
+  let now = Date.parse("2026-10-28T09:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  await b.call("POST", `/api/${KEY}/call`, { id: "old", status: "ended", lines: heard([["them", "Bye."]]) });
+  assert.match((await b.tool("follow_call")).text, /^Round 1 · no call in progress yet/);
+  await b.call("POST", `/api/${KEY}/call`, { id: "left-open", status: "live", lines: heard([["them", "Hi."]]) });
+  now += 10 * 60 * 1000; // the page was closed without Stop
+  assert.match((await b.tool("follow_call")).text, /^Round 1 · no call in progress yet/);
+  await b.call("POST", `/api/${KEY}/call`, { id: "new", status: "live", lines: heard([["them", "Shall we start?"]]) });
+  assert.match((await b.tool("follow_call", { cursor: 0 })).text, /^Round 1 · call time 00:00 · in progress/);
+});
