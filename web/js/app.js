@@ -82,10 +82,16 @@ function show(el, visible = true) {
   el.classList.toggle("hidden", !visible);
 }
 
+let toastTimer = null;
 function setNotice(el, text, kind = "") {
   el.textContent = text || "";
-  el.className = `notice ${kind}`;
+  el.className = `notice ${kind}${el.id === "notice" ? " toast" : ""}`;
   show(el, Boolean(text));
+  // During the call, messages are a toast: information goes away by itself, warnings stay until clicked.
+  if (el.id === "notice") {
+    clearTimeout(toastTimer);
+    if (text && kind !== "warn" && kind !== "error") toastTimer = setTimeout(() => show(el, false), 6000);
+  }
 }
 
 function message(payload) {
@@ -167,9 +173,12 @@ function resetLive() {
   show($("live-hint"), !withClaude);
   $("live-hint").textContent = t("live_hint_copy");
   $("ask-claude").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
+  $("ask-claude").classList.remove("attention");
+  shownSuggestions = null;
   showMeeting(null);
   showSuggestions(null);
   showFollow(null);
+  markFresh(false);
   showLatency(null);
   showHealth(null);
   setBridgeState(null);
@@ -222,6 +231,7 @@ async function startCall({ demo = false } = {}) {
   show($("setup"), false);
   show($("ended"), false);
   show($("live"), true);
+  document.body.classList.add("in-call");
   resetLive();
   if (bridgeSync) bridgeSync.stop();
   bridgeSync = null;
@@ -248,6 +258,7 @@ async function startCall({ demo = false } = {}) {
     session = null;
     show($("live"), false);
     show($("setup"), true);
+    document.body.classList.remove("in-call");
     setNotice($("setup-notice"), text, "error");
   }
 }
@@ -341,6 +352,7 @@ let following = null;
 function showFollow(f) {
   following = f;
   renderFollow();
+  renderWaiting();
 }
 
 function renderFollow() {
@@ -354,6 +366,7 @@ function renderFollow() {
   const state = ago === null ? "off" : ago <= 120 ? "on" : "lost";
   el.className = `follow-state ${state === "on" ? "on" : "off"}`;
   el.textContent = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t("follow_off");
+  $("ask-claude").classList.toggle("attention", state !== "on");
 }
 
 /** The briefing (the Cockpit, or Claude with set_meeting_context): title, goal, and its questions, ticked when answered. */
@@ -375,12 +388,13 @@ function showMeeting(m) {
   show($("questions-box"), items.length > 0);
 }
 
-/** What Claude sent with show_suggestions (null: the hint to ask for it). */
+/** What Claude sent with show_suggestions (null: what to do to get some). */
+let shownSuggestions = null;
 function showSuggestions(s) {
-  const topic = $("sug-topic");
-  topic.textContent = s ? s.topic || "—" : t("sug_waiting");
-  topic.className = s ? "topic" : "topic waiting";
-  $("sug-time").textContent = s ? t("sug_updated", { time: new Date(s.updatedAt).toLocaleTimeString() }) : "";
+  const fresh = Boolean(s && (!shownSuggestions || shownSuggestions.updatedAt !== s.updatedAt));
+  shownSuggestions = s;
+  renderWaiting();
+  renderSugTime();
   const list = $("suggestions");
   list.innerHTML = "";
   for (const item of (s && s.suggestions) || []) {
@@ -426,12 +440,59 @@ function showSuggestions(s) {
     box.append(div);
   }
   show($("previous-box"), previous.length > 0);
+  if (fresh) markFresh(true);
+}
+
+/** The topic, or while nothing came yet: what to do (Claude not following) or that it is listening. */
+function renderWaiting() {
+  const topic = $("sug-topic");
+  const s = shownSuggestions;
+  topic.textContent = s ? s.topic || "—" : following ? t("sug_listening") : t("sug_waiting");
+  topic.className = s ? "topic" : "topic waiting";
+}
+
+/** "now", "12 s ago": how fresh the suggestions are, refreshed every second; the exact time on hover. */
+function renderSugTime() {
+  const el = $("sug-time");
+  const s = shownSuggestions;
+  if (!s) {
+    el.textContent = "";
+    return;
+  }
+  const ago = Math.max(0, Math.round((Date.now() - s.updatedAt) / 1000));
+  el.textContent = ago < 10 ? t("sug_now") : ago < 60 ? t("sug_ago", { s: ago }) : t("sug_ago_min", { m: Math.floor(ago / 60) });
+  el.title = t("sug_updated", { time: new Date(s.updatedAt).toLocaleTimeString() });
+}
+
+/** New suggestions: they glow for a moment, and the tab's title says so when the page isn't in front. */
+let freshTimer = null;
+function markFresh(on) {
+  const now = $("now");
+  clearTimeout(freshTimer);
+  now.classList.remove("fresh");
+  if (!on) {
+    setBadge(false);
+    return;
+  }
+  void now.offsetWidth; // restart the animation
+  now.classList.add("fresh");
+  freshTimer = setTimeout(() => now.classList.remove("fresh"), 3000);
+  setBadge(document.hidden || Boolean(pipWindow && !pipWindow.document.hasFocus()));
+}
+
+function setBadge(on) {
+  const title = on ? `${t("title_new")} · ${t("app_title")}` : t("app_title");
+  document.title = title;
+  if (pipWindow) pipWindow.document.title = title;
 }
 
 function tick() {
   if (!session || !session.running || session.stopping) return;
   $("timer").textContent = fmtTime(session.elapsed());
-  if (bridgeSync) renderFollow();
+  if (bridgeSync) {
+    renderFollow();
+    renderSugTime();
+  }
 }
 
 async function stopCall() {
@@ -450,6 +511,8 @@ function showEnded(call) {
   show($("live"), false);
   show($("setup"), false);
   show($("ended"), true);
+  document.body.classList.remove("in-call");
+  markFresh(false);
 }
 
 async function openPip() {
@@ -460,6 +523,7 @@ async function openPip() {
   if (pipWindow) return;
   const live = $("live");
   pipWindow = await window.documentPictureInPicture.requestWindow({ width: 400, height: 560 });
+  pipWindow.addEventListener("focus", () => setBadge(false));
   for (const sheet of document.styleSheets) {
     try {
       const style = pipWindow.document.createElement("style");
@@ -600,7 +664,7 @@ function renderBridge(note = "") {
 /** The small "Claude connected" note in the live panel. */
 function setBridgeState(state) {
   const el = $("bridge-state");
-  el.className = `bridge-state small ${state || ""}`;
+  el.className = `bridge-state meta ${state || ""}`;
   el.textContent = state === "ok" ? t("bridge_live_ok") : state === "error" ? t("bridge_live_error") : "";
   show(el, Boolean(state));
   if (state === "error") setNotice($("notice"), t("bridge_down"), "warn");
@@ -621,7 +685,15 @@ function renderHistory() {
     const title = document.createElement("span");
     title.className = "title";
     const first = (call.transcript || []).find((l) => l.text);
-    title.textContent = `${callLabel(call)}${first ? ` · ${first.text.slice(0, 60)}` : ""}`;
+    const when = document.createElement("strong");
+    when.textContent = callLabel(call);
+    title.append(when);
+    if (first) {
+      const preview = document.createElement("span");
+      preview.className = "muted";
+      preview.textContent = ` · ${first.text.slice(0, 80)}`;
+      title.append(preview);
+    }
     title.addEventListener("click", () => {
       showEnded(call);
       showTab("call");
@@ -664,6 +736,7 @@ async function renderManualModel(note = "") {
   const missing = await missingManualFiles(model);
   if (ticket !== manualRender) return;
   const started = missing.length < manualDownloadLinks(model).length;
+  if (started && missing.length) $("manual-box").open = true;
   const state = !started ? "" : missing.length ? t("manual_missing", { files: missing.join(", ") }) : t("manual_ready");
   $("manual-status").textContent = [note, state].filter(Boolean).join(" ");
 }
@@ -681,6 +754,9 @@ function renderSettings() {
 // ------------------------------------------------------------------ wiring
 function wire() {
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+  // Back on the page: the "new suggestions" mark in the tab's title has done its job.
+  document.addEventListener("visibilitychange", () => !document.hidden && setBadge(false));
+  $("notice").addEventListener("click", () => show($("notice"), false));
   $("start").addEventListener("click", () => startCall());
   $("demo").addEventListener("click", () => startCall({ demo: true }));
   $("stop").addEventListener("click", stopCall);
