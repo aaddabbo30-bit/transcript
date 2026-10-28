@@ -127,6 +127,24 @@ jobs:
           npx playwright install --with-deps chromium
           node web/tests/e2e.mjs
 
+  whisper:
+    name: Whisper with the real model (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Cache the speech model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper-models
+          key: whisper-base-q8-transformers-4.3.1
+      - name: Our decoding with the real whisper-base (language, silence, glossary)
+        run: |
+          npm install --no-save --no-audit --no-fund @huggingface/transformers@4.3.1
+          node web/tests/whisper-real.mjs
+
   bridge:
     name: Claude bridge (Worker + MCP)
     runs-on: ubuntu-latest

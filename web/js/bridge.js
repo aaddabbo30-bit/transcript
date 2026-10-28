@@ -97,7 +97,7 @@ export class Bridge {
   /** What Claude last asked to show in the page (its show_suggestions tool), and the meeting's title and goal. */
   async suggestions() {
     const data = await this.request("GET", "suggestions");
-    return { suggestions: data.suggestions || null, meeting: data.meeting || null };
+    return { suggestions: data.suggestions || null, meeting: data.meeting || null, follow: data.follow || null };
   }
 
   clear() {
@@ -110,14 +110,16 @@ export class Bridge {
  * Claude asks to show for it (onSuggestions, each time it changes).
  */
 export class BridgeSync {
-  constructor({ bridge, session, intervalMs = 2500, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {} }) {
+  constructor({ bridge, session, intervalMs = 2500, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {}, onFollow = () => {} }) {
     this.bridge = bridge;
     this.session = session;
     this.intervalMs = intervalMs;
     this.onState = onState;
     this.onSuggestions = onSuggestions;
     this.onMeeting = onMeeting;
-    this.meeting = undefined; // the briefing's title and goal last passed on (JSON)
+    this.onFollow = onFollow;
+    this.meeting = undefined; // the briefing last passed on (JSON)
+    this.follow = undefined; // Claude following the call, last passed on (JSON)
     this.state = null; // "ok" | "error"
     this.sent = null;
     this.busy = null;
@@ -137,7 +139,9 @@ export class BridgeSync {
       startedAt: s.startedAt.toISOString(),
       status,
       lang: s.language,
-      lines: s.store.lines.map(({ t, speaker, text }) => ({ t, speaker, text })),
+      ui: s.settings && s.settings.uiLanguage,
+      // n: the order lines were heard in (a late line can land before others); lang: what Whisper heard.
+      lines: s.store.lines.map(({ t, speaker, text, seq, lang }) => ({ t, speaker, text, n: seq, ...(lang ? { lang } : {}) })),
     };
   }
 
@@ -147,11 +151,17 @@ export class BridgeSync {
     this.onState(state);
   }
 
-  receive(suggestions, meeting = null) {
-    const m = JSON.stringify(meeting ? { title: meeting.title, goal: meeting.goal } : null);
+  receive(suggestions, meeting = null, follow = null) {
+    const m = JSON.stringify(meeting ? { ...meeting, updatedAt: undefined } : null);
     if (m !== this.meeting) {
       this.meeting = m;
       this.onMeeting(meeting);
+    }
+    const thisCall = follow && follow.callId === this.session.startedAt.toISOString() ? follow : null;
+    const f = JSON.stringify(thisCall);
+    if (f !== this.follow) {
+      this.follow = f;
+      this.onFollow(thisCall);
     }
     if (!suggestions || suggestions.callId !== this.session.startedAt.toISOString() || suggestions.updatedAt === this.shownAt) return;
     this.shownAt = suggestions.updatedAt;
@@ -163,7 +173,7 @@ export class BridgeSync {
       const reply = await this.bridge.send(call);
       this.sent = signature;
       this.setState("ok");
-      this.receive(reply && reply.suggestions, reply && reply.meeting);
+      this.receive(reply && reply.suggestions, reply && reply.meeting, reply && reply.follow);
     } catch {
       this.setState("error");
     }
@@ -171,8 +181,8 @@ export class BridgeSync {
 
   async poll() {
     try {
-      const { suggestions, meeting } = await this.bridge.suggestions();
-      this.receive(suggestions, meeting);
+      const { suggestions, meeting, follow } = await this.bridge.suggestions();
+      this.receive(suggestions, meeting, follow);
       this.setState("ok");
     } catch {
       this.setState("error");

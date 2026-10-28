@@ -4,11 +4,14 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "../js/bridge.js";
-import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, chatTranscript } from "../js/prompts.js";
+import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, chatTranscript, projectInstructions } from "../js/prompts.js";
+import { followRequest } from "../../bridge/src/worker.js";
+import { EchoDetector } from "../js/echo.js";
 import { AudioRouter, Segmenter, TARGET_RATE, resample } from "../js/segmenter.js";
 import { CallSession, TranscriptReplay } from "../js/session.js";
 import { ScriptedTranscriber } from "../js/transcriber.js";
 import { TranscriptStore, cleanTranscription, collapseRepetitions, fmtTime, parseTranscript } from "../js/transcript.js";
+import { DecodeControl, decoderPrefix, glossaryPrompt, judgeSegment, textTokens } from "../js/whisper-core.js";
 
 const ROOT = new URL("../../", import.meta.url);
 
@@ -158,14 +161,18 @@ test("audio session: segmenter + (scripted) Whisper, and a warning when the call
   const transcriber = new ScriptedTranscriber(["Ciao Marco, come stai?", "Ti chiamo per la cena di sabato.", "Did you finish it?", "A presto!"], 5);
   const s = new CallSession({ settings: SETTINGS, transcriber, capture, onEvent: (k, p) => events.push([k, p]), clock: () => now });
   await s.start();
-  await s.waitFor(() => s.store.length >= 3, 3000);
   const result = await s.stop();
   assert.equal(s.store.lines[0].text, "Ciao Marco, come stai?");
-  assert.ok(result.transcript.length >= 3);
+  // The whole recording arrives at once: while Whisper works on the first sentence the others
+  // pile up, and are transcribed together in one window instead of one window each.
+  assert.equal(result.transcript.length, 2);
+  assert.equal(transcriber.calls.length, 2);
+  assert.ok(transcriber.calls[1].seconds > 8, `${transcriber.calls[1].seconds}`);
+  assert.ok(s.stats.joined >= 2);
   assert.ok(events.some(([k, p]) => k === "model_ready" && p === "scripted"));
   // How long after the end of each sentence its text appeared.
   const latencies = events.filter(([k]) => k === "latency").map(([, p]) => p);
-  assert.ok(latencies.length >= 3 && latencies.every((s) => s >= 0), latencies.join(" ")); // (the test clock jumps: no real delays here)
+  assert.ok(latencies.length === 2 && latencies.every((s) => s >= 0), latencies.join(" ")); // (the test clock jumps: no real delays here)
   assert.ok(events.some(([k, p]) => k === "audio" && p === "fake capture"));
 
   // Only the microphone heard for a while: the shared tab/screen audio is probably missing.
@@ -232,7 +239,7 @@ test("bridge requests: simple text/plain POSTs, readable errors", async () => {
 
 test("bridge sync sends the call when it changes, reports trouble, marks the end", async () => {
   const store = new TranscriptStore();
-  const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store, lastInsight: null };
+  const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store, settings: { uiLanguage: "it" } };
   const calls = [];
   let down = false;
   const bridge = {
@@ -240,20 +247,21 @@ test("bridge sync sends the call when it changes, reports trouble, marks the end
       if (down) throw new BridgeError("unreachable");
       calls.push(call);
     },
-    suggestions: async () => null,
+    suggestions: async () => ({ suggestions: null, meeting: null, follow: null }),
   };
   const states = [];
   const sync = new BridgeSync({ bridge, session, intervalMs: 60000, onState: (s) => states.push(s) });
   await sync.tick();
   await sync.tick(); // nothing new: nothing sent
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], { id: "2026-10-27T09:00:00.000Z", startedAt: "2026-10-27T09:00:00.000Z", status: "live", lang: "it", lines: [] });
-  store.add({ t: 3, speaker: "me", text: "Ciao Giulia" });
+  assert.deepEqual(calls[0], { id: "2026-10-27T09:00:00.000Z", startedAt: "2026-10-27T09:00:00.000Z", status: "live", lang: "it", ui: "it", lines: [] });
+  store.add({ t: 3, speaker: "me", text: "Ciao Giulia", lang: "it" });
   down = true;
   await sync.tick();
   down = false;
   await sync.tick(); // the failed update is sent again
-  assert.deepEqual(calls[1].lines, [{ t: 3, speaker: "me", text: "Ciao Giulia" }]);
+  // n: the order the line was heard in; lang: what Whisper heard.
+  assert.deepEqual(calls[1].lines, [{ t: 3, speaker: "me", text: "Ciao Giulia", n: 1, lang: "it" }]);
   assert.deepEqual(states, ["ok", "error", "ok"]);
   await sync.finish();
   assert.equal(calls[2].status, "ended");
@@ -331,4 +339,192 @@ test("bridge sync sends a new line at once, not at the next tick", async () => {
   sync.nudge(1); // after Stop, nothing more is sent
   await new Promise((r) => setTimeout(r, 30));
   assert.deepEqual(sent, [0, 1]);
+});
+
+// --------------------------------------------------------- echo and Whisper
+const delayed = (x, seconds, gain) => {
+  const d = Math.round(seconds * TARGET_RATE);
+  const y = new Float32Array(x.length);
+  for (let i = d; i < x.length; i++) y[i] = gain * x[i - d];
+  return y;
+};
+const mix = (...xs) => {
+  const y = new Float32Array(Math.max(...xs.map((x) => x.length)));
+  for (const x of xs) for (let i = 0; i < x.length; i++) y[i] += x[i];
+  return y;
+};
+let seed = 1;
+const noise = (n, a) =>
+  Float32Array.from({ length: n }, () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed / 2147483647 - 0.5) * 2 * a;
+  });
+
+/** Both sources through the router, as the live capture feeds them; what reaches Whisper and what is dropped as echo. */
+function routeBoth(them, me) {
+  const kept = [];
+  const echoes = [];
+  let now = 0;
+  const router = new AudioRouter((c) => c.source === "me" && kept.push(c), () => now, { onEcho: (c) => echoes.push(c) });
+  for (let i = 0; i < Math.max(them.length, me.length); i += 1600) {
+    now = (i + 1600) / TARGET_RATE;
+    router.feed("them", them.subarray(i, i + 1600), now);
+    router.feed("me", me.subarray(i, i + 1600), now);
+  }
+  router.flushAll();
+  return { kept, echoes };
+}
+
+test("echo: the microphone hearing the call from the speakers is dropped, the user's own voice is kept", () => {
+  const speech = readWav16k(new URL("tests/fixtures/speech_it_en.wav", ROOT));
+  const n = speech.length;
+  // Speakers: the call reaches the microphone 150 ms later, quieter.
+  const echo = routeBoth(speech, mix(delayed(speech, 0.15, 0.2), noise(n, 0.002)));
+  assert.equal(echo.kept.length, 0);
+  assert.ok(echo.echoes.length >= 3);
+  assert.ok(echo.echoes.every((c) => c.echo.corr > 0.85 && c.echo.lagS > 0.1 && c.echo.lagS < 0.2), echo.echoes.map((c) => c.echo.corr.toFixed(2)).join(" "));
+  // The user alone (the others silent): nothing to compare with, all kept.
+  const alone = routeBoth(new Float32Array(n), mix(speech, noise(n, 0.002)));
+  assert.ok(alone.kept.length >= 3 && alone.echoes.length === 0);
+  // The user talking while the others talk (and are heard from the speakers): kept.
+  const other = Float32Array.from(speech).reverse();
+  const both = routeBoth(other, mix(speech, delayed(other, 0.15, 0.25), noise(n, 0.002)));
+  assert.ok(both.kept.length >= 2 && both.echoes.length === 0, `${both.kept.length} kept, ${both.echoes.length} echoes`);
+  // A gap in the shared audio doesn't shift its timeline.
+  const d = new EchoDetector();
+  d.addReference(new Float32Array(3200), 0);
+  d.addReference(new Float32Array(3200), 1.2);
+  assert.equal(d.ref.length, Math.round(1.4 / 0.02));
+});
+
+test("Whisper decoding: language between Italian and English, no-speech probability, confidence", () => {
+  const ids = { sot: 10, eot: 5, prev: 11, transcribe: 12, notimestamps: 13, nospeech: 14, lang: { it: 20, en: 21 }, suppress: [14, 7], beginSuppress: [5] };
+  const row = (values) => {
+    const r = new Float32Array(30).fill(-5);
+    for (const [i, v] of Object.entries(values)) r[i] = v;
+    return r;
+  };
+  // Auto: the more likely of the two; the others (e.g. Spanish at 22) never win.
+  const auto = new DecodeControl(ids, { prefixLength: 1 });
+  const first = row({ 20: 3, 21: 1, 22: 9, 14: 2 });
+  auto.step(1, first);
+  assert.equal(auto.language, "it");
+  assert.deepEqual([...first].map((v, i) => (v > -Infinity ? i : null)).filter((i) => i !== null), [20]);
+  assert.ok(auto.noSpeechProb > 0 && auto.noSpeechProb < 0.01);
+  // Then "transcribe" and "no timestamps" are forced; text steps add up the confidence.
+  const second = row({ 12: 0, 3: 5 });
+  auto.step(2, second);
+  assert.equal(second.indexOf(Math.max(...second)), 12);
+  auto.step(3, row({ 13: 0 }));
+  // Text: the first token can't be the end of the text; tokens Whisper never writes are filtered out.
+  const text1 = row({ 5: 20, 7: 20, 3: 10 });
+  auto.step(4, text1);
+  assert.equal(text1.indexOf(Math.max(...text1)), 3);
+  const text2 = row({ 5: 20 });
+  auto.step(5, text2);
+  assert.equal(text2.indexOf(Math.max(...text2)), 5);
+  assert.ok(auto.avgLogprob > -0.01 && auto.avgLogprob <= 0);
+  // A close call keeps the language this speaker has been speaking.
+  const close = new DecodeControl(ids, { prefer: "en", prefixLength: 1 });
+  close.step(1, row({ 20: 2, 21: 1.5 }));
+  assert.equal(close.language, "en");
+  // Forced language; a prompt shifts where the steps start; silence shows as a high no-speech probability.
+  const forced = new DecodeControl(ids, { language: "en", prefixLength: 4 });
+  const quiet = row({ 20: 9, 14: 12 });
+  forced.step(4, quiet);
+  assert.equal(forced.language, "en");
+  assert.ok(forced.noSpeechProb > 0.9);
+  assert.equal(quiet.indexOf(Math.max(...quiet)), 21);
+
+  assert.deepEqual(decoderPrefix(ids, []), [10]);
+  assert.deepEqual(decoderPrefix(ids, [1, 2]), [11, 1, 2, 10]);
+  assert.deepEqual(textTokens([11n, 1n, 2n, 10n, 21n, 12n, 13n, 3n, 4n, 30n, 5n, 3n], 4, ids), [3, 4]);
+  assert.equal(glossaryPrompt([" Jaromir", "X-13", "Jaromir", ""]), "Jaromir, X-13.");
+  assert.equal(glossaryPrompt([]), "");
+});
+
+test("what Whisper invents on silence is dropped, real speech is kept", () => {
+  assert.equal(judgeSegment({ text: "Thank you.", noSpeechProb: 0.8, avgLogprob: -1.2 }), "no_speech");
+  assert.equal(judgeSegment({ text: "We compile everything.", noSpeechProb: 0.02, avgLogprob: -0.3 }), "ok");
+  // What the real whisper-base gives on 3 s of silence (see whisper-real.mjs).
+  assert.equal(judgeSegment({ text: "you", noSpeechProb: 0.95, avgLogprob: -0.54 }), "no_speech");
+  assert.equal(judgeSegment({ text: "A presto!", noSpeechProb: 0.11, avgLogprob: -0.55 }), "ok");
+  assert.equal(judgeSegment({ text: "blah", noSpeechProb: 0.1, avgLogprob: -2.1 }), "unsure");
+  assert.equal(judgeSegment({ text: "Jaromir, X-13.", noSpeechProb: 0.3, avgLogprob: -0.4 }, "Jaromir, X-13, MATLAB."), "prompt_echo");
+  assert.equal(judgeSegment({ text: "" }), "empty");
+  // Short polite words: kept when Whisper is sure, dropped when it isn't; sounds always dropped.
+  assert.equal(cleanTranscription("Thank you.", { noSpeechProb: 0.4, avgLogprob: -0.3 }), "");
+  assert.equal(cleanTranscription("Thank you.", { noSpeechProb: 0.01, avgLogprob: -0.2 }), "Thank you.");
+  assert.equal(cleanTranscription("Okay.", { noSpeechProb: 0.02, avgLogprob: -0.9 }), "");
+  assert.equal(cleanTranscription("Thank you."), "Thank you."); // confidence unknown: kept
+  assert.equal(cleanTranscription("Uh..."), "");
+  assert.equal(cleanTranscription("Shhh."), "");
+});
+
+test("Whisper's queue: joins one speaker's waiting sentences, never across the other speaker; language and glossary passed on", async () => {
+  const events = [];
+  const transcriber = new ScriptedTranscriber([{ text: "Uno.", language: "en" }, { text: "Due.", language: "en" }, "Tre.", "Quattro."], 30);
+  let now = 0;
+  const s = new CallSession({ settings: SETTINGS, transcriber, onEvent: (k, p) => events.push([k, p]), clock: () => now });
+  await s.start();
+  now = 100;
+  s.setGlossary(["Jaromir", "X-13"]);
+  const chunk = (source, start) => ({ source, start, end: start + 1, audio: new Float32Array(16000) });
+  // Whisper busy with the first; meanwhile: them, them, me, them.
+  s.transcribe(chunk("them", 0));
+  s.transcribe(chunk("them", 2));
+  s.transcribe(chunk("them", 4));
+  s.transcribe(chunk("me", 6));
+  s.transcribe(chunk("them", 8));
+  s.tick();
+  await s.stop();
+  // While Whisper worked on the first, four waited; the oldest ended 97 s before "now".
+  const health = events.filter(([k]) => k === "health")[0][1];
+  assert.equal(health.waiting, 4);
+  assert.equal(health.lag, 97);
+  // 1: them@0 alone; 2: them@2+4 joined; 3: me@6; 4: them@8 (the user spoke in between: not joined).
+  assert.deepEqual(transcriber.calls.map((c) => Math.round(c.seconds * 100) / 100), [1, 2.25, 1, 1]);
+  assert.deepEqual(s.store.lines.map((l) => [l.t, l.speaker, l.text]), [[0, "them", "Uno."], [2, "them", "Due."], [6, "me", "Tre."], [8, "them", "Quattro."]]);
+  assert.equal(transcriber.calls[0].prompt, "Jaromir, X-13.");
+  // After two English sentences, a hesitation between Italian and English leans to English.
+  assert.equal(transcriber.calls[3].prefer, "en");
+  assert.equal(s.store.lines[0].lang, "en");
+});
+
+test("microphone echoes: counted, and the user is told once", async () => {
+  const events = [];
+  const s = new CallSession({ settings: SETTINGS, transcriber: new ScriptedTranscriber([], 1), onEvent: (k, p) => events.push([k, p]), clock: () => 0 });
+  await s.start();
+  for (let i = 0; i < 5; i++) s.echoDropped();
+  assert.equal(events.filter(([k, p]) => k === "warning" && p === "echo").length, 1);
+  assert.equal(s.stats.echoes, 5);
+  await s.stop();
+});
+
+test("bridge sync: whether Claude follows this call, and the briefing with its questions", async () => {
+  const store = new TranscriptStore();
+  const session = { startedAt: new Date("2026-10-27T09:00:00Z"), language: "it", store, settings: {} };
+  const id = "2026-10-27T09:00:00.000Z";
+  let follow = { callId: id, rounds: 3, readAt: 1, cursor: 4 };
+  const meeting = { title: "Budget", goal: "", questions: [{ text: "Chi paga?", done: false }], objectives: [], glossary: ["MPED"] };
+  const bridge = { send: async () => ({ ok: true }), suggestions: async () => ({ suggestions: null, meeting, follow }) };
+  const follows = [];
+  const meetings = [];
+  const sync = new BridgeSync({ bridge, session, onFollow: (f) => follows.push(f && f.rounds), onMeeting: (m) => meetings.push(m) });
+  await sync.tick(); // sends the call (no follow state in the answer)
+  await sync.tick(); // asks: Claude follows this call
+  await sync.tick(); // same: not passed on again
+  follow = { ...follow, rounds: 4 };
+  await sync.tick();
+  follow = { ...follow, callId: "another call" };
+  await sync.tick();
+  assert.deepEqual(follows, [null, 3, 4, null]);
+  assert.deepEqual(meetings.at(-1).questions, [{ text: "Chi paga?", done: false }]);
+});
+
+test("the request to follow the call is the connector's own, and a Project's instructions come in both languages", () => {
+  assert.equal(chatConnectorPrompt("it", "follow"), followRequest());
+  assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*set_meeting_context[\s\S]*merged[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
+  assert.match(projectInstructions("it"), /follow_call senza cursor[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
+  assert.match(projectInstructions("en"), /^You are my prompter/);
 });

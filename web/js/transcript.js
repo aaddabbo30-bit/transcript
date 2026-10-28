@@ -22,6 +22,30 @@ const LIKELY_INVENTED = new Set([
   "applause",
 ]);
 
+// Sounds that say nothing to whoever reads the transcript.
+const FILLERS = new Set(["uh", "um", "uhm", "ehm", "eh", "hmm", "mm", "mmhm", "mhm", "oh", "ah", "shh", "shhh", "beep"]);
+// Short replies that are often real and often invented on silence or noise:
+// dropped when Whisper itself is unsure (same idea as the desktop app's SUSPICIOUS).
+const SUSPICIOUS = new Set([
+  "thank you",
+  "thank you very much",
+  "thank you so much",
+  "thanks",
+  "grazie",
+  "grazie mille",
+  "okay",
+  "ok",
+  "bye",
+  "bye bye",
+  "yeah",
+  "yes",
+  "so",
+  "and",
+  "i",
+  "e",
+  "si",
+]);
+
 export function normalize(text) {
   return text
     .normalize("NFKD")
@@ -60,12 +84,16 @@ export function collapseRepetitions(text, maxRepeats = 2) {
   return words.join(" ");
 }
 
-/** Clean one Whisper result; returns "" when it should be dropped. */
-export function cleanTranscription(text) {
+/**
+ * Clean one Whisper result; returns "" when it should be dropped. noSpeechProb
+ * and avgLogprob (see whisper-core.js) say how sure Whisper was, when known.
+ */
+export function cleanTranscription(text, { noSpeechProb = null, avgLogprob = null } = {}) {
   const t = collapseRepetitions((text || "").replace(/\s+/g, " ").trim());
   const norm = normalize(t);
-  if (!norm || ALWAYS_DROP.test(t) || LIKELY_INVENTED.has(norm)) return "";
+  if (!norm || ALWAYS_DROP.test(t) || LIKELY_INVENTED.has(norm) || FILLERS.has(norm)) return "";
   if (/^\[.*\]$|^\(.*\)$/.test(t)) return ""; // "[Musica]", "(applausi)"
+  if (SUSPICIOUS.has(norm) && ((noSpeechProb ?? 0) > 0.15 || (avgLogprob ?? 0) < -0.5)) return "";
   return t;
 }
 
@@ -115,7 +143,7 @@ export class TranscriptStore {
     this.echoesDropped = 0;
   }
 
-  add({ t, speaker, text }) {
+  add({ t, speaker, text, lang = null }) {
     const nearby = this.lines.slice(-30).filter((o) => Math.abs(o.t - t) <= 10);
     if (speaker === ME && nearby.some((o) => o.speaker === THEM && similar(o.text, text))) {
       this.echoesDropped++;
@@ -130,6 +158,7 @@ export class TranscriptStore {
       }
     }
     const line = { t, speaker, text, seq: ++this.seq };
+    if (lang) line.lang = lang;
     this.lines.push(line);
     this.lines.sort((a, b) => a.t - b.t);
     return line;

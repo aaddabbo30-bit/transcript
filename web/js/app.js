@@ -7,7 +7,7 @@ import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOrig
 import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
 import { ModelFileError, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
-import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt } from "./prompts.js";
+import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, projectInstructions } from "./prompts.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
 import { fmtTime, parseTranscript } from "./transcript.js";
@@ -169,7 +169,9 @@ function resetLive() {
   $("ask-claude").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
   showMeeting(null);
   showSuggestions(null);
+  showFollow(null);
   showLatency(null);
+  showHealth(null);
   setBridgeState(null);
   $("timer").textContent = "00:00";
   setNotice($("notice"), "");
@@ -226,7 +228,18 @@ async function startCall({ demo = false } = {}) {
   try {
     await session.start();
     if (bridgeActive()) {
-      bridgeSync = new BridgeSync({ bridge: makeBridge(), session, onState: setBridgeState, onSuggestions: showSuggestions, onMeeting: showMeeting });
+      bridgeSync = new BridgeSync({
+        bridge: makeBridge(),
+        session,
+        onState: setBridgeState,
+        onSuggestions: showSuggestions,
+        onFollow: showFollow,
+        onMeeting: (m) => {
+          showMeeting(m);
+          // The meeting's names and terms help Whisper spell them right.
+          if (session) session.setGlossary(m ? m.glossary : []);
+        },
+      });
       bridgeSync.start();
     }
   } catch (err) {
@@ -251,6 +264,9 @@ function handleEvent(kind, payload) {
     case "latency":
       showLatency(payload);
       break;
+    case "health":
+      showHealth(payload);
+      break;
     case "warning":
       setNotice($("notice"), message(payload), "warn");
       break;
@@ -258,9 +274,14 @@ function handleEvent(kind, payload) {
       setStatus("error");
       setNotice($("notice"), message(payload), "error");
       break;
-    case "model_ready":
-      setNotice($("notice"), t("model_ready", { device: payload }), "ok");
+    case "model_ready": {
+      // How long one block of speech takes on this computer, measured when the model loaded.
+      const ms = session && session.transcriber && session.transcriber.windowMs;
+      const device = ms ? t("model_speed", { device: payload, s: (ms / 1000).toFixed(1) }) : payload;
+      const faster = ms && ms < 1200 && settings.whisperModel === "base" ? ` ${t("try_small")}` : "";
+      setNotice($("notice"), t("model_ready", { device }) + faster, "ok");
       break;
+    }
     case "audio":
       $("audio-info").textContent = payload;
       break;
@@ -294,17 +315,64 @@ function addTranscriptLine(line) {
 
 /** How long after the end of a sentence its text appears: the average of the last few. */
 let latencies = [];
+let lagS = 0;
 function showLatency(seconds) {
   latencies = seconds === null ? [] : [...latencies, seconds].slice(-5);
-  const avg = latencies.reduce((a, b) => a + b, 0) / Math.max(1, latencies.length);
-  $("latency").textContent = latencies.length ? t("latency", { s: avg.toFixed(1) }) : "";
+  renderLatency();
 }
 
-/** The meeting's title and goal, from the briefing (the Cockpit, or Claude with set_meeting_context). */
+/** The transcription's state, every quarter second: how far behind it is, and what was dropped. */
+function showHealth(h) {
+  lagS = h ? h.lag : 0;
+  renderLatency();
+  if (h) $("latency").title = `Whisper: ${h.batches} · ${h.joined} · echo ${h.echoes} · ${h.dropped}`;
+}
+
+function renderLatency() {
+  const el = $("latency");
+  const late = lagS >= 6;
+  el.classList.toggle("late", late);
+  const avg = latencies.reduce((a, b) => a + b, 0) / Math.max(1, latencies.length);
+  el.textContent = late ? t("lag", { s: Math.round(lagS) }) : latencies.length ? t("latency", { s: avg.toFixed(1) }) : "";
+}
+
+/** Whether Claude is following the call (follow_call reads), refreshed every second by tick(). */
+let following = null;
+function showFollow(f) {
+  following = f;
+  renderFollow();
+}
+
+function renderFollow() {
+  const el = $("follow-state");
+  if (!bridgeActive()) {
+    el.textContent = "";
+    return;
+  }
+  // A round waits up to 25 s for new lines, and Claude then takes a while to answer (longer with extended thinking).
+  const ago = following ? Math.max(0, Math.round((Date.now() - following.readAt) / 1000)) : null;
+  const state = ago === null ? "off" : ago <= 120 ? "on" : "lost";
+  el.className = `follow-state ${state === "on" ? "on" : "off"}`;
+  el.textContent = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t("follow_off");
+}
+
+/** The briefing (the Cockpit, or Claude with set_meeting_context): title, goal, and its questions, ticked when answered. */
 function showMeeting(m) {
-  show($("meeting"), Boolean(m));
+  show($("meeting"), Boolean(m && (m.title || m.goal)));
   $("meeting-title").textContent = (m && m.title) || "";
   $("meeting-goal").textContent = m && m.goal ? `· ${m.goal}` : "";
+  const items = (m && m.questions && m.questions.length ? m.questions : (m && m.objectives) || []).slice(0, 12);
+  const list = $("questions");
+  list.innerHTML = "";
+  // Open ones first: they are what is left to ask.
+  for (const item of [...items.filter((x) => !x.done), ...items.filter((x) => x.done)]) {
+    const li = document.createElement("li");
+    li.textContent = item.text;
+    if (item.done) li.className = "done";
+    list.append(li);
+  }
+  $("questions-count").textContent = items.length ? t("questions_count", { open: items.filter((x) => !x.done).length, all: items.length }) : "";
+  show($("questions-box"), items.length > 0);
 }
 
 /** What Claude sent with show_suggestions (null: the hint to ask for it). */
@@ -316,18 +384,25 @@ function showSuggestions(s) {
   const list = $("suggestions");
   list.innerHTML = "";
   for (const item of (s && s.suggestions) || []) {
+    const say = item.say || item.text;
     const card = document.createElement("div");
-    card.className = "suggestion";
+    card.className = `suggestion ${item.kind}`;
     card.title = t("click_to_copy");
     const kind = document.createElement("div");
     kind.className = `kind ${item.kind}`;
     kind.textContent = t(`kind_${item.kind}`);
     const text = document.createElement("div");
     text.className = "text";
-    text.textContent = item.text;
+    text.textContent = say;
     card.append(kind, text);
+    if (item.why) {
+      const why = document.createElement("div");
+      why.className = "why";
+      why.textContent = item.why;
+      card.append(why);
+    }
     card.addEventListener("click", async (e) => {
-      if (await copyText(item.text, e.view || window)) card.classList.add("copied");
+      if (await copyText(say, e.view || window)) card.classList.add("copied");
     });
     list.append(card);
   }
@@ -339,11 +414,24 @@ function showSuggestions(s) {
     $("remember").append(li);
   }
   show($("sug-remember-box"), remember.length > 0);
+  // Earlier suggestions of this call: still at hand, one click copies them.
+  const previous = ((s && s.previous) || []).slice(0, 4);
+  const box = $("previous");
+  box.innerHTML = "";
+  for (const item of previous) {
+    const div = document.createElement("div");
+    div.textContent = `${t(`kind_${item.kind}`)} · ${item.say || item.text}`;
+    div.title = t("click_to_copy");
+    div.addEventListener("click", (e) => copyText(item.say || item.text, e.view || window));
+    box.append(div);
+  }
+  show($("previous-box"), previous.length > 0);
 }
 
 function tick() {
   if (!session || !session.running || session.stopping) return;
   $("timer").textContent = fmtTime(session.elapsed());
+  if (bridgeSync) renderFollow();
 }
 
 async function stopCall() {
@@ -504,6 +592,8 @@ function renderBridge(note = "") {
   $("bridge-connector").value = bridgeActive() ? makeBridge().connectorUrl : "";
   show($("bridge-connector-box"), bridgeActive());
   show($("bridge-off"), bridgeActive());
+  show($("project-box"), bridgeActive());
+  $("project-status").textContent = "";
   $("bridge-status").textContent = note || (bridgeHere ? bridgeProblem : "");
 }
 
@@ -646,6 +736,9 @@ function wire() {
     setBridgeState(null);
     renderBridge(t("bridge_off_done"));
     renderClaudeBox();
+  });
+  $("project-copy").addEventListener("click", async (e) => {
+    if (await copyText(projectInstructions(settings.uiLanguage), e.view || window)) $("project-status").textContent = t("project_copied");
   });
   $("bridge-copy").addEventListener("click", async (e) => {
     if (await copyText($("bridge-connector").value, e.view || window)) $("bridge-status").textContent = t("copied");
