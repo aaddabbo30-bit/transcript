@@ -349,9 +349,9 @@ function renderFollow() {
     el.textContent = "";
     return;
   }
-  // A round waits up to 25 s for new lines, and Claude then takes a while to answer.
+  // A round waits up to 25 s for new lines, and Claude then takes a while to answer (longer with extended thinking).
   const ago = following ? Math.max(0, Math.round((Date.now() - following.readAt) / 1000)) : null;
-  const state = ago === null ? "off" : ago <= 75 ? "on" : "lost";
+  const state = ago === null ? "off" : ago <= 120 ? "on" : "lost";
   el.className = `follow-state ${state === "on" ? "on" : "off"}`;
   el.textContent = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t("follow_off");
 }
