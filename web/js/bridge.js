@@ -94,9 +94,12 @@ export class Bridge {
     return this.request("POST", "call", JSON.stringify(call));
   }
 
-  /** What Claude last asked to show in the page (its show_suggestions tool), and the meeting's title and goal. */
-  async suggestions() {
-    const data = await this.request("GET", "suggestions");
+  /**
+   * What Claude last asked to show in the page (its show_suggestions tool), the meeting's briefing and
+   * whether Claude follows the call: for this call only (a new call doesn't get the last one's briefing).
+   */
+  async suggestions(callId = "") {
+    const data = await this.request("GET", callId ? `suggestions?call=${encodeURIComponent(callId)}` : "suggestions");
     return { suggestions: data.suggestions || null, meeting: data.meeting || null, follow: data.follow || null };
   }
 
@@ -181,7 +184,7 @@ export class BridgeSync {
 
   async poll() {
     try {
-      const { suggestions, meeting, follow } = await this.bridge.suggestions();
+      const { suggestions, meeting, follow } = await this.bridge.suggestions(this.session.startedAt.toISOString());
       this.receive(suggestions, meeting, follow);
       this.setState("ok");
     } catch {

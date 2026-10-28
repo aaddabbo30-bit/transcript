@@ -295,7 +295,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat di Claude/);
   // The meeting briefing (from the user's Cockpit artifact, or from Claude): its title and questions show above the suggestions.
   assert.ok(await page.isHidden("#meeting"));
-  assert.match(await page.textContent("#follow-state"), /^○ Claude non sta seguendo la call/);
+  assert.match(await page.textContent("#follow-state"), /^Claude non sta seguendo la call/);
   const briefing = await mcp(connector, "tools/call", {
     name: "set_meeting_context",
     arguments: {
@@ -309,12 +309,12 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.match(briefing.content[0].text, /^Briefing saved for «Offerta Milano»: 1 objectives, 2 questions, 2 glossary terms/);
   await page.waitForSelector("#meeting:not(.hidden)", { timeout: 15000 });
   assert.equal(await page.textContent("#meeting-title"), "Offerta Milano");
-  assert.equal(await page.textContent("#meeting-goal"), "· Chiudere la data di inizio");
+  assert.equal(await page.textContent("#meeting-goal"), "Chiudere la data di inizio");
   assert.equal(await page.textContent("#questions-count"), "2 aperte su 2");
   // Claude follows the call: its first round has the briefing and the call so far; the page shows it is following.
   const round = await readBridge(connector, "follow_call", {}, appEnv);
   assert.match(round, /^Round 1 · call time [\s\S]*Questions the user wants to ask or settle:\n- Chi paga il trasloco\?[\s\S]*How to follow, every round:/);
-  await page.waitForFunction(() => /^● Claude segue la call · giro 1 · \d+ s fa$/.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
+  await page.waitForFunction(() => /^Claude segue la call: giro 1, \d+ s fa$/.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
   const shown = await mcp(connector, "tools/call", {
     name: "show_suggestions",
     arguments: {
@@ -352,14 +352,45 @@ await step("app served by its bridge: connected by itself, last step in the Call
   }
   await page.click("#suggestions .suggestion >> nth=0");
   assert.equal(await clipboard(page), "Quando dovresti iniziare?");
-  // The next set replaces it; the earlier ones stay below, one click away.
-  await mcp(connector, "tools/call", { name: "show_suggestions", arguments: { suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] } }, appEnv);
-  await page.waitForFunction(() => document.querySelectorAll("#previous div").length === 2, null, { timeout: 15000 });
-  assert.equal(await page.textContent("#previous div >> nth=0"), "Domanda · Quando dovresti iniziare?");
+  // The next set takes "now"; the earlier ones stay in the script below: nothing disappears.
+  await mcp(connector, "tools/call", { name: "show_suggestions", arguments: { topic: "La data", suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] } }, appEnv);
+  await page.waitForFunction(() => document.querySelectorAll("#script .item").length === 2, null, { timeout: 15000 });
+  assert.equal(await page.textContent("#suggestions .suggestion .text"), "Posso iniziare a gennaio.");
+  assert.deepEqual(await page.$$eval("#script .item .say", (els) => els.map((e) => e.textContent)), ["Quando dovresti iniziare?", "Non promettere una risposta entro oggi."]);
+  assert.match(await page.textContent("#script .group-head"), /^\d\d:\d\dGiulia ha un'offerta di lavoro a Milano$/);
+  // Filter by kind (all answers, the one in "now" too), pin one: it stays on top of the script.
+  await page.click("#script-filter .filter >> text=Risposte 1");
+  assert.deepEqual(await page.$$eval("#script .item .say", (els) => els.map((e) => e.textContent)), ["Posso iniziare a gennaio."]);
+  await page.click("#script-filter .filter >> text=Tutte 3");
+  await page.click("#script .item.warning .pin");
+  assert.equal(await page.textContent("#pinned .item .say"), "Non promettere una risposta entro oggi.");
+  await page.click("#script .item.question .say");
+  assert.equal(await clipboard(page), "Quando dovresti iniziare?");
+  if (SHOTS) {
+    await page.evaluate(() => document.getElementById("notice").classList.add("hidden")); // no toast in the picture
+    await page.mouse.move(0, 0);
+    await page.screenshot({ path: join(SHOTS, "web-script.png"), clip: { x: 0, y: 0, width: 1200, height: 800 } });
+  }
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
   assert.match(await page.textContent("#ended-hint"), /Claude ha tutta la chiamata/);
+  // After the call, and in the history: everything Claude suggested.
+  assert.equal(await page.textContent("#ended-script-count"), "3");
+  assert.equal(await page.locator("#ended-script .item").count(), 3);
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-ended-script.png"), fullPage: true });
   await untilBridge(connector, /Status: ended\. To follow a new call, the user opens the Call Assistant at https:\/\/app\.test\/ and presses Start\./, appEnv);
+  // A new call starts clean: no briefing, no suggestions of the last one.
+  await page.click("#new-call");
+  await page.click("#demo");
+  await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length > 2, null, { timeout: 20000 });
+  await page.waitForTimeout(3000); // a few rounds with the bridge
+  assert.ok(await page.isHidden("#meeting"));
+  assert.ok(await page.isHidden("#questions-box"));
+  assert.ok(await page.isHidden("#script-box"));
+  assert.equal(await page.locator("#suggestions .suggestion").count(), 0);
+  assert.doesNotMatch(await readBridge(connector, "get_current_call", {}, appEnv), /Offerta Milano/);
+  await page.click("#stop");
+  await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
   await context.close();
 });
 

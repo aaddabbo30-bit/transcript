@@ -8,6 +8,7 @@ import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcr
 import { translator } from "./i18n.js";
 import { ModelFileError, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, projectInstructions } from "./prompts.js";
+import { KINDS, SuggestionScript } from "./script.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
 import { fmtTime, parseTranscript } from "./transcript.js";
@@ -175,6 +176,8 @@ function resetLive() {
   $("ask-claude").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
   $("ask-claude").classList.remove("attention");
   shownSuggestions = null;
+  script = new SuggestionScript();
+  scriptFilter = "all";
   showMeeting(null);
   showSuggestions(null);
   showFollow(null);
@@ -299,6 +302,7 @@ function handleEvent(kind, payload) {
     case "ended":
       if (bridgeSync) bridgeSync.finish();
       bridgeSync = null;
+      if (script.items.length) payload.suggestions = script.toJSON();
       saveCall(payload);
       showEnded(payload);
       break;
@@ -373,7 +377,7 @@ function renderFollow() {
 function showMeeting(m) {
   show($("meeting"), Boolean(m && (m.title || m.goal)));
   $("meeting-title").textContent = (m && m.title) || "";
-  $("meeting-goal").textContent = m && m.goal ? `· ${m.goal}` : "";
+  $("meeting-goal").textContent = (m && m.goal) || "";
   const items = (m && m.questions && m.questions.length ? m.questions : (m && m.objectives) || []).slice(0, 12);
   const list = $("questions");
   list.innerHTML = "";
@@ -388,38 +392,19 @@ function showMeeting(m) {
   show($("questions-box"), items.length > 0);
 }
 
-/** What Claude sent with show_suggestions (null: what to do to get some). */
+/** What Claude sent with show_suggestions (null: what to do to get some). The latest set is "now"; every set goes in the script. */
 let shownSuggestions = null;
+let script = new SuggestionScript();
+let scriptFilter = "all";
 function showSuggestions(s) {
   const fresh = Boolean(s && (!shownSuggestions || shownSuggestions.updatedAt !== s.updatedAt));
   shownSuggestions = s;
+  if (s && fresh) script.add(s);
   renderWaiting();
   renderSugTime();
   const list = $("suggestions");
   list.innerHTML = "";
-  for (const item of (s && s.suggestions) || []) {
-    const say = item.say || item.text;
-    const card = document.createElement("div");
-    card.className = `suggestion ${item.kind}`;
-    card.title = t("click_to_copy");
-    const kind = document.createElement("div");
-    kind.className = `kind ${item.kind}`;
-    kind.textContent = t(`kind_${item.kind}`);
-    const text = document.createElement("div");
-    text.className = "text";
-    text.textContent = say;
-    card.append(kind, text);
-    if (item.why) {
-      const why = document.createElement("div");
-      why.className = "why";
-      why.textContent = item.why;
-      card.append(why);
-    }
-    card.addEventListener("click", async (e) => {
-      if (await copyText(say, e.view || window)) card.classList.add("copied");
-    });
-    list.append(card);
-  }
+  for (const item of (s && s.suggestions) || []) list.append(suggestionCard(item));
   const remember = (s && s.remember) || [];
   $("remember").innerHTML = "";
   for (const item of remember) {
@@ -428,19 +413,134 @@ function showSuggestions(s) {
     $("remember").append(li);
   }
   show($("sug-remember-box"), remember.length > 0);
-  // Earlier suggestions of this call: still at hand, one click copies them.
-  const previous = ((s && s.previous) || []).slice(0, 4);
-  const box = $("previous");
-  box.innerHTML = "";
-  for (const item of previous) {
-    const div = document.createElement("div");
-    div.textContent = `${t(`kind_${item.kind}`)} · ${item.say || item.text}`;
-    div.title = t("click_to_copy");
-    div.addEventListener("click", (e) => copyText(item.say || item.text, e.view || window));
-    box.append(div);
-  }
-  show($("previous-box"), previous.length > 0);
+  renderScript();
   if (fresh) markFresh(true);
+}
+
+function suggestionCard(item) {
+  const say = item.say || item.text;
+  const card = document.createElement("div");
+  card.className = `suggestion ${item.kind}`;
+  card.title = t("click_to_copy");
+  const kind = document.createElement("div");
+  kind.className = `kind ${item.kind}`;
+  kind.textContent = t(`kind_${item.kind}`);
+  const text = document.createElement("div");
+  text.className = "text";
+  text.textContent = say;
+  card.append(kind, text);
+  if (item.why) {
+    const why = document.createElement("div");
+    why.className = "why";
+    why.textContent = item.why;
+    card.append(why);
+  }
+  card.addEventListener("click", async (e) => {
+    if (await copyText(say, e.view || window)) card.classList.add("copied");
+  });
+  return card;
+}
+
+/** One line of the script: what to say (click copies it), why, and a pin. */
+function scriptItem(item, { pin = true } = {}) {
+  const row = document.createElement("div");
+  row.className = `item ${item.kind}`;
+  const kind = document.createElement("span");
+  kind.className = "kind";
+  kind.textContent = t(`kind_${item.kind}`);
+  const body = document.createElement("div");
+  body.className = "body";
+  const say = document.createElement("div");
+  say.className = "say";
+  say.textContent = item.say;
+  say.title = t("click_to_copy");
+  say.addEventListener("click", async (e) => {
+    if (await copyText(item.say, e.view || window)) row.classList.add("copied");
+  });
+  body.append(say);
+  if (item.why) {
+    const why = document.createElement("div");
+    why.className = "why";
+    why.textContent = item.why;
+    body.append(why);
+  }
+  row.append(kind, body);
+  if (pin) {
+    const button = document.createElement("button");
+    const on = script.pinned.has(item.key);
+    button.className = `pin${on ? " on" : ""}`;
+    button.textContent = on ? "★" : "☆";
+    button.title = t(on ? "pin_remove" : "pin_add");
+    button.setAttribute("aria-pressed", String(on));
+    button.addEventListener("click", () => {
+      script.togglePin(item.key);
+      renderScript();
+    });
+    row.append(button);
+  }
+  return row;
+}
+
+function scriptGroup(group, list, opts) {
+  const block = document.createElement("div");
+  block.className = "group";
+  const head = document.createElement("div");
+  head.className = "group-head";
+  const time = document.createElement("time");
+  time.textContent = new Date(group.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  head.append(time);
+  if (group.topic) {
+    const topic = document.createElement("span");
+    topic.textContent = group.topic;
+    head.append(topic);
+  }
+  block.append(head);
+  for (const item of group.items) block.append(scriptItem(item, opts));
+  list.append(block);
+}
+
+/** The script under "now": every earlier suggestion of the call, newest first; pinned ones on top; a filter by kind. */
+function renderScript() {
+  const counts = script.counts();
+  show($("script-box"), counts.all > 0 && (counts.all > ((shownSuggestions && shownSuggestions.suggestions) || []).length || scriptFilter !== "all"));
+  const filters = $("script-filter");
+  filters.innerHTML = "";
+  for (const kind of ["all", ...KINDS]) {
+    if (kind !== "all" && !counts[kind]) continue;
+    const b = document.createElement("button");
+    b.className = `filter${scriptFilter === kind ? " on" : ""}`;
+    b.textContent = `${t(`filter_${kind}`)} ${counts[kind]}`;
+    b.setAttribute("aria-pressed", String(scriptFilter === kind));
+    b.addEventListener("click", () => {
+      scriptFilter = kind;
+      renderScript();
+    });
+    filters.append(b);
+  }
+  const pinned = script.pinnedItems();
+  const box = $("pinned");
+  box.innerHTML = "";
+  if (pinned.length) {
+    const head = document.createElement("div");
+    head.className = "group-head";
+    head.textContent = t("sec_pinned");
+    box.append(head);
+    for (const item of pinned) box.append(scriptItem(item));
+  }
+  show(box, pinned.length > 0);
+  const list = $("script");
+  list.innerHTML = "";
+  for (const group of script.groups(scriptFilter)) scriptGroup(group, list);
+}
+
+/** After the call: everything Claude suggested, newest first (kept with the call in the history). */
+function renderEndedScript(call) {
+  const ended = new SuggestionScript(call.suggestions || []);
+  const list = $("ended-script");
+  list.innerHTML = "";
+  for (const group of ended.groups("all")) scriptGroup(group, list, { pin: false });
+  $("ended-script-count").textContent = ended.items.length ? String(ended.items.length) : "";
+  show($("ended-script-box"), ended.items.length > 0);
 }
 
 /** The topic, or while nothing came yet: what to do (Claude not following) or that it is listening. */
@@ -504,6 +604,7 @@ async function stopCall() {
 /** The end of a call (or a call opened from the history): what Claude can do with it now. */
 function showEnded(call) {
   lastResult = call;
+  renderEndedScript(call);
   $("ended-meta").textContent = callLabel(call);
   $("ended-hint").textContent = bridgeActive() ? t("ended_hint_connector") : t("ended_hint_copy");
   setNotice($("summary-claude-status"), "");
@@ -524,6 +625,10 @@ async function openPip() {
   const live = $("live");
   pipWindow = await window.documentPictureInPicture.requestWindow({ width: 400, height: 560 });
   pipWindow.addEventListener("focus", () => setBadge(false));
+  // The copied styles load the app's font with relative links: resolve them against the page.
+  const base = pipWindow.document.createElement("base");
+  base.href = document.baseURI;
+  pipWindow.document.head.append(base);
   for (const sheet of document.styleSheets) {
     try {
       const style = pipWindow.document.createElement("style");
