@@ -46,10 +46,12 @@ const last = seg.flush();
 if (last) chunks.push(last);
 assert.ok(chunks.length >= 3, `${chunks.length} utterances`);
 
-const show = (label, r) =>
-  console.log(
-    `${label.padEnd(14)} ${String(r.language).padEnd(4)} nospeech ${r.noSpeechProb.toFixed(2)}  logprob ${r.avgLogprob.toFixed(2)}  ${String(r.ms).padStart(5)} ms  ${JSON.stringify(r.text)}`,
-  );
+const show = (label, r) => {
+  const line = `${label.padEnd(14)} ${String(r.language).padEnd(4)} nospeech ${r.noSpeechProb.toFixed(2)}  logprob ${r.avgLogprob.toFixed(2)}  ${String(r.ms).padStart(5)} ms  ${JSON.stringify(r.text)}`;
+  console.log(line);
+  // On GitHub, also a notice on the check: the numbers can be read without opening the log.
+  if (process.env.GITHUB_ACTIONS) console.log(`::notice title=${label.replace(/[:,]/g, " ")}::${line.replace(/%/g, "%25")}`);
+};
 
 // 1. Each utterance, language left to Whisper (Italian or English only).
 const auto = [];

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import worker, { FOLLOW_REQUEST, cleanCall, describeCall, glossaryOf, itemDone } from "../src/worker.js";
+import worker, { cleanCall, describeCall, followRequest, glossaryOf, itemDone } from "../src/worker.js";
 import { memoryD1 } from "./d1.mjs";
 
 const KEY = "k".repeat(8) + "ABCdef123_-xyz789QRSTuv"; // 31 characters
@@ -192,7 +192,7 @@ test("ready-made prompts carry the transcript, so Claude answers at once", async
   assert.match(text, /show_suggestions/);
   assert.match(text, /Lines so far: 60\./);
   const follow = (await b.rpc("prompts/get", { name: "segui_la_chiamata" })).result.messages[0].content.text;
-  assert.ok(follow.startsWith(FOLLOW_REQUEST));
+  assert.ok(follow.startsWith(followRequest()));
   assert.match(follow, /set_meeting_context[\s\S]*glossary[\s\S]*follow_call senza cursor[\s\S]*show_suggestions[\s\S]*«say» nella lingua che parlano gli altri/);
   assert.match(text, /get_current_call/);
   assert.match(text, /Transcript, the last 10 minutes \(41 of 60 lines\)/);

@@ -192,7 +192,7 @@ const TOOLS = [
 
 // The request that starts Claude following the call (the page's «Fai seguire a
 // Claude» button copies the same text, see web/js/prompts.js).
-export const FOLLOW_REQUEST =
+const FOLLOW_REQUEST =
   "Segui la mia call in diretta con il connector Call Assistant, fino alla fine, e fammi da suggeritore.\n" +
   "1. Prima di iniziare, una volta sola: raccogli da questa chat tutto quello che sappiamo di questo meeting (obiettivi, domande che voglio fare, " +
   "le mie posizioni e i miei limiti, le persone e i loro ruoli, il contesto) e salvalo con set_meeting_context, con un glossary di nomi, sigle e " +
@@ -205,6 +205,11 @@ export const FOLLOW_REQUEST =
   "4. Subito dopo richiama follow_call con il cursor che ti ha dato.\n" +
   "Non scrivere nella chat durante la call: guardo la finestra dell'Assistente. Quando la call finisce scrivimi una riga e proponimi " +
   "riassunto, decisioni e prossimi passi.";
+
+/** (A function: the Workers runtime accepts only handlers and functions as exports of the main module.) */
+export function followRequest() {
+  return FOLLOW_REQUEST;
+}
 
 // Ready-made requests the user picks in claude.ai. They carry the transcript
 // themselves, so Claude can answer at once.

@@ -27,7 +27,7 @@ Scrivi:
 3. I punti chiave.
 4. Le cose da fare: chi, cosa, entro quando.
 5. Cosa vale la pena ricordare di me e delle persone della chiamata per le prossime volte.`,
-    // Same text as FOLLOW_REQUEST in bridge/src/worker.js (the connector's «Segui la chiamata» prompt).
+    // Same text as followRequest() in bridge/src/worker.js (the connector's «Segui la chiamata» prompt).
     followConnector:
       "Segui la mia call in diretta con il connector Call Assistant, fino alla fine, e fammi da suggeritore.\n" +
       "1. Prima di iniziare, una volta sola: raccogli da questa chat tutto quello che sappiamo di questo meeting (obiettivi, domande che voglio fare, " +

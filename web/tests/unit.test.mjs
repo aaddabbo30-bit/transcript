@@ -5,7 +5,7 @@ import { test } from "node:test";
 
 import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "../js/bridge.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, chatTranscript, projectInstructions } from "../js/prompts.js";
-import { FOLLOW_REQUEST } from "../../bridge/src/worker.js";
+import { followRequest } from "../../bridge/src/worker.js";
 import { EchoDetector } from "../js/echo.js";
 import { AudioRouter, Segmenter, TARGET_RATE, resample } from "../js/segmenter.js";
 import { CallSession, TranscriptReplay } from "../js/session.js";
@@ -520,7 +520,7 @@ test("bridge sync: whether Claude follows this call, and the briefing with its q
 });
 
 test("the request to follow the call is the connector's own, and a Project's instructions come in both languages", () => {
-  assert.equal(chatConnectorPrompt("it", "follow"), FOLLOW_REQUEST);
+  assert.equal(chatConnectorPrompt("it", "follow"), followRequest());
   assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
   assert.match(projectInstructions("it"), /set_meeting_context[\s\S]*follow_call[\s\S]*show_suggestions/);
   assert.match(projectInstructions("en"), /^You are my prompter/);
