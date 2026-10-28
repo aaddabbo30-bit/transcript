@@ -446,6 +446,9 @@ test("Whisper decoding: language between Italian and English, no-speech probabil
 test("what Whisper invents on silence is dropped, real speech is kept", () => {
   assert.equal(judgeSegment({ text: "Thank you.", noSpeechProb: 0.8, avgLogprob: -1.2 }), "no_speech");
   assert.equal(judgeSegment({ text: "We compile everything.", noSpeechProb: 0.02, avgLogprob: -0.3 }), "ok");
+  // What the real whisper-base gives on 3 s of silence (see whisper-real.mjs).
+  assert.equal(judgeSegment({ text: "you", noSpeechProb: 0.95, avgLogprob: -0.54 }), "no_speech");
+  assert.equal(judgeSegment({ text: "A presto!", noSpeechProb: 0.11, avgLogprob: -0.55 }), "ok");
   assert.equal(judgeSegment({ text: "blah", noSpeechProb: 0.1, avgLogprob: -2.1 }), "unsure");
   assert.equal(judgeSegment({ text: "Jaromir, X-13.", noSpeechProb: 0.3, avgLogprob: -0.4 }, "Jaromir, X-13, MATLAB."), "prompt_echo");
   assert.equal(judgeSegment({ text: "" }), "empty");
@@ -521,7 +524,7 @@ test("bridge sync: whether Claude follows this call, and the briefing with its q
 
 test("the request to follow the call is the connector's own, and a Project's instructions come in both languages", () => {
   assert.equal(chatConnectorPrompt("it", "follow"), followRequest());
-  assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
-  assert.match(projectInstructions("it"), /set_meeting_context[\s\S]*follow_call[\s\S]*show_suggestions/);
+  assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*set_meeting_context[\s\S]*merged[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
+  assert.match(projectInstructions("it"), /follow_call senza cursor[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
   assert.match(projectInstructions("en"), /^You are my prompter/);
 });

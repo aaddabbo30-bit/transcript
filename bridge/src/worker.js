@@ -51,8 +51,9 @@ const TOOLS = [
       "Follow the user's call live, round after round, and act as their prompter. Use it when the user asks you to follow the call " +
       "(«segui la chiamata», «follow the call»). Each round waits up to 25 s for new lines (it answers at once when the others ask " +
       "the user something) and says exactly what to do next: usually show_suggestions with what the user could say now, then " +
-      "follow_call again with the cursor it gives you. Leave cursor out the first time: that round brings the meeting briefing and " +
-      "the call so far. Don't write in the chat between rounds; the user reads your suggestions in the Call Assistant window. " +
+      "follow_call again with the cursor it gives you. Leave cursor out the first time: that round brings the saved meeting briefing " +
+      "(complete it with set_meeting_context from what the conversation knows) and the call so far. Don't write in the chat between " +
+      "rounds; the user reads your suggestions in the Call Assistant window. " +
       TRANSCRIPT_NOTE,
     inputSchema: {
       type: "object",
@@ -114,7 +115,8 @@ const TOOLS = [
     description:
       "Save the briefing of the meeting the user is preparing or is in: goal, participants, the user's constraints and positions, " +
       "background (acronyms, state of the topics, notes), objectives, questions to ask, and a glossary of names and terms. Replaces " +
-      "the previous one. Before following a call, put here everything the conversation with the user says about this meeting: " +
+      "the previous one, so merge: keep what the saved briefing (shown by follow_call) already has. Before following a call, add here " +
+      "what the conversation with the user says about this meeting: " +
       "follow_call and get_current_call show it with the transcript, the Call Assistant page shows the open questions, and the " +
       "glossary helps the transcription spell names and acronyms right.",
     inputSchema: {
@@ -194,15 +196,15 @@ const TOOLS = [
 // Claude» button copies the same text, see web/js/prompts.js).
 const FOLLOW_REQUEST =
   "Segui la mia call in diretta con il connector Call Assistant, fino alla fine, e fammi da suggeritore.\n" +
-  "1. Prima di iniziare, una volta sola: raccogli da questa chat tutto quello che sappiamo di questo meeting (obiettivi, domande che voglio fare, " +
-  "le mie posizioni e i miei limiti, le persone e i loro ruoli, il contesto) e salvalo con set_meeting_context, con un glossary di nomi, sigle e " +
-  "termini tecnici che si sentiranno. Se in questa chat non c'è niente sul meeting, salta questo passo.\n" +
-  "2. Poi chiama follow_call senza cursor e segui quello che ti dice a ogni giro.\n" +
+  "1. Chiama follow_call senza cursor: ti mostra il briefing già salvato (se c'è) e la call fin qui.\n" +
+  "2. Se da questa chat sai del meeting cose che nel briefing mancano (obiettivi, domande che voglio fare, le mie posizioni e i miei limiti, " +
+  "le persone e i loro ruoli, il contesto, nomi, sigle e termini tecnici per il glossary), salvale con set_meeting_context unite a quelle " +
+  "già presenti: il briefing nuovo sostituisce il vecchio, quindi riportale tutte.\n" +
   "3. A ogni giro con qualcosa di nuovo chiama show_suggestions con 1-3 proposte che posso dire subito: se mi hanno appena chiesto qualcosa, " +
   "prima la risposta; poi domande che fanno avanzare i miei obiettivi, punti da sollevare, avvisi (rischi, impegni da non prendere). " +
   "«say» nella lingua che parlano gli altri, pronto da leggere ad alta voce; «why» in italiano, al massimo 10 parole. " +
   "Non ripetere proposte già fatte; segna in answered le domande del briefing che si sono chiarite.\n" +
-  "4. Subito dopo richiama follow_call con il cursor che ti ha dato.\n" +
+  "4. Subito dopo richiama follow_call con il cursor che ti ha dato, e così via.\n" +
   "Non scrivere nella chat durante la call: guardo la finestra dell'Assistente. Quando la call finisce scrivimi una riga e proponimi " +
   "riassunto, decisioni e prossimi passi.";
 
@@ -692,7 +694,12 @@ async function followRound(args, ctx) {
   const fresh = sameCall ? newLines(call, cursor) : call.lines.filter((l) => l.t >= lengthOf(call) - 180);
   if (!sameCall) {
     // First round for this call: the briefing, the call so far, the method.
-    out.push("", briefing ? describeContext(briefing).trim() : "No meeting briefing: rely on this conversation and on what you know about the user.");
+    out.push("", briefing ? describeContext(briefing).trim() : "No meeting briefing saved yet.");
+    out.push(
+      "If this conversation knows more about the meeting than the briefing above (objectives, questions the user wants to ask, their positions, " +
+        "the people, names and acronyms for the glossary), call set_meeting_context first with everything merged: it replaces the saved briefing, " +
+        "so keep what is already there.",
+    );
     out.push("", fresh.length ? `The call so far (last 3 minutes, ${fresh.length} of ${call.lines.length} lines). ${TRANSCRIPT_NOTE}` : "Nothing has been said yet.");
     for (const l of fresh) out.push(lineText(l));
     out.push("", FOLLOW_HOW);
@@ -849,7 +856,7 @@ async function handleRpc(msg, ctx) {
             "When you suggest what to say during a call, also send it with show_suggestions: the user sees it next to the transcript. " +
             "When the user asks you to follow the call («segui la chiamata»), call follow_call and do what each round says: " +
             "it acts as their live prompter through show_suggestions, without writing in the chat. " +
-            "Before following, save what the conversation says about the meeting with set_meeting_context (with a glossary of names and terms)." +
+            "Complete the saved briefing with what the conversation knows about the meeting, through set_meeting_context (merged, with a glossary of names and terms)." +
             (ctx.app ? ` The Call Assistant page is at ${ctx.app}: the user opens it and presses Start to follow a call.` : ""),
         },
       };

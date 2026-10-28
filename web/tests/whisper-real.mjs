@@ -95,6 +95,7 @@ const noise = await transcribeWith(asr, LogitsProcessor, hiss, { language: "en" 
 show("noise", noise);
 for (const [name, r] of [["silence", silence], ["noise", noise]]) {
   const verdict = judgeSegment(r);
+  assert.notEqual(verdict, "ok", `${name}: Whisper's own numbers should give it away`);
   const text = verdict === "ok" ? cleanTranscription(r.text, r) : "";
   assert.equal(text, "", `${name} gave ${JSON.stringify(r.text)} (${verdict})`);
 }

@@ -141,6 +141,8 @@ export function judgeSegment({ text, noSpeechProb = 0, avgLogprob = 0 }, prompt 
   const clean = String(text || "").trim();
   if (!clean) return "empty";
   if (noSpeechProb > 0.6 && avgLogprob < -1.0) return "no_speech";
+  // Very likely silence, and only a word or two: on silence Whisper writes "you" or "Thank you." quite confidently.
+  if (noSpeechProb > 0.8 && clean.split(/\s+/).length <= 3) return "no_speech";
   if (avgLogprob < -1.8) return "unsure";
   if (prompt) {
     const words = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, " ").split(/\s+/).filter(Boolean);

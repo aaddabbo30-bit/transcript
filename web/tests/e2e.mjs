@@ -290,7 +290,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   // One click: the request to follow the call, ready to paste in Claude's chat.
   assert.equal((await page.textContent("#ask-claude")).trim(), "Fai seguire a Claude ↗");
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
-  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant[\s\S]*set_meeting_context[\s\S]*follow_call[\s\S]*show_suggestions/);
+  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant[\s\S]*follow_call[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
   assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat di Claude/);
   // The meeting briefing (from the user's Cockpit artifact, or from Claude): its title and questions show above the suggestions.
   assert.ok(await page.isHidden("#meeting"));

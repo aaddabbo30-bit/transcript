@@ -193,7 +193,7 @@ test("ready-made prompts carry the transcript, so Claude answers at once", async
   assert.match(text, /Lines so far: 60\./);
   const follow = (await b.rpc("prompts/get", { name: "segui_la_chiamata" })).result.messages[0].content.text;
   assert.ok(follow.startsWith(followRequest()));
-  assert.match(follow, /set_meeting_context[\s\S]*glossary[\s\S]*follow_call senza cursor[\s\S]*show_suggestions[\s\S]*«say» nella lingua che parlano gli altri/);
+  assert.match(follow, /follow_call senza cursor[\s\S]*set_meeting_context unite a quelle già presenti[\s\S]*show_suggestions[\s\S]*«say» nella lingua che parlano gli altri/);
   assert.match(text, /get_current_call/);
   assert.match(text, /Transcript, the last 10 minutes \(41 of 60 lines\)/);
   assert.match(text, /\[14:45\] Them: frase 59\n<\/call>$/);
@@ -353,7 +353,7 @@ test("follow_call: the first round brings the briefing, the call so far and the 
   const first = (await b.tool("follow_call")).text;
   assert.match(first, /^Round 1 · call time 00:10 · in progress · 3 lines\./);
   assert.match(first, /the others speak English; the user's language is Italian\. Write "say" in English; "why", "topic" and "remember" in Italian\./);
-  assert.match(first, /Meeting briefing[\s\S]*Title: X-13 rollout[\s\S]*- Who tests on staging\?/);
+  assert.match(first, /Meeting briefing[\s\S]*Title: X-13 rollout[\s\S]*- Who tests on staging\?\nIf this conversation knows more about the meeting[\s\S]*keep what is already there\./);
   assert.match(first, /The call so far \(last 3 minutes, 3 of 3 lines\)[\s\S]*\[00:10\] Them: Can you send the scripts\?/);
   assert.match(first, /How to follow, every round:\n1\. [\s\S]*kind "answer"[\s\S]*4\. Call follow_call again/);
   assert.match(first, /then call follow_call with cursor=3\. Don't write in the chat\.$/);
