@@ -71,7 +71,7 @@ The connector address contains a secret key made by the page and kept in that br
    - either way, turn on **"Share audio"**;
    - for a call on your phone, put it on speaker and leave only *My microphone* ticked.
 
-   The live panel shows *Claude connected*, **Claude's suggestions on the left** and **the transcript on the right**.
+   The page switches to the call view: one bar with the status, the timer and **Stop**, then **Claude's suggestions on the left** and **the transcript on the right**. New suggestions glow for a moment and say how fresh they are (*just now*, *12 s ago*); when you are in another window, the tab's title says *New suggestions*. Messages show at the bottom and go away by themselves. The page follows your system's light or dark theme.
 2. **Let Claude follow the call.** Press **Fai seguire a Claude ↗ / Let Claude follow ↗**. It copies the request and, the first time, opens claude.ai. Paste it (Ctrl+V) and send, best in **the chat where you prepared the meeting** (with the connector on: the tools menu under the message box). Or just write **«segui la chiamata»** / «follow the call» there.
    - First, Claude saves what that chat knows about the meeting as the briefing: objectives, the questions you want to ask, your positions, the people, names and acronyms.
    - Then it follows the call in rounds (tool `follow_call`). Each round waits for new lines, at once when the others ask you something, and tells Claude what is new, which briefing questions are still open and what it already suggested.

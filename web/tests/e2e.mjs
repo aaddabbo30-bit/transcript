@@ -67,6 +67,7 @@ async function newContext() {
   const context = await browser.newContext({
     viewport: { width: 900, height: 1000 },
     locale: "it-IT",
+    colorScheme: process.env.E2E_SCHEME === "dark" ? "dark" : "light", // E2E_SCHEME=dark: screenshots in dark mode
     permissions: ["clipboard-read", "clipboard-write"],
   });
   // «Ask Claude» opens claude.ai: answer with a stand-in page.
@@ -332,11 +333,23 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.equal(await page.textContent("#suggestions .suggestion >> nth=0"), "DomandaQuando dovresti iniziare?serve la data per decidere");
   assert.match(await page.textContent("#suggestions .suggestion >> nth=1"), /^Attenzione/);
   assert.equal(await page.textContent("#remember"), "Decidere entro venerdì");
-  assert.match(await page.textContent("#sug-time"), /^aggiornati alle /);
+  assert.match(await page.textContent("#sug-time"), /^(adesso|\d+ s fa)$/);
+  assert.match(await page.getAttribute("#sug-time", "title"), /^aggiornati alle /);
+  // Fresh suggestions glow for a moment.
+  assert.ok(await page.evaluate(() => document.getElementById("now").classList.contains("fresh")));
   // The answered question is ticked, and listed after the open one.
   await page.waitForFunction(() => document.querySelector("#questions-count").textContent === "1 aperte su 2", null, { timeout: 15000 });
   assert.deepEqual(await page.$$eval("#questions li", (lis) => lis.map((li) => [li.textContent, li.className])), [["Quando si inizia?", ""], ["Chi paga il trasloco?", "done"]]);
-  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-suggestions.png"), clip: { x: 0, y: 0, width: 1200, height: 700 } });
+  if (SHOTS) {
+    // After the arrival animation; then the same panel as narrow as the always-on-top window.
+    await page.waitForFunction(() => !document.getElementById("now").classList.contains("fresh"), null, { timeout: 5000 });
+    await page.screenshot({ path: join(SHOTS, "web-suggestions.png"), clip: { x: 0, y: 0, width: 1200, height: 700 } });
+    await page.setViewportSize({ width: 400, height: 640 });
+    await page.evaluate(() => document.body.classList.add("pip"));
+    await page.screenshot({ path: join(SHOTS, "web-pip.png") });
+    await page.evaluate(() => document.body.classList.remove("pip"));
+    await page.setViewportSize({ width: 1200, height: 800 });
+  }
   await page.click("#suggestions .suggestion >> nth=0");
   assert.equal(await clipboard(page), "Quando dovresti iniziare?");
   // The next set replaces it; the earlier ones stay below, one click away.

@@ -7,15 +7,14 @@
   <meta name="description" content="Assistente per chiamate e video: trascrive nel browser con Whisper e Claude legge la chiamata dalla tua chat.">
   <link rel="icon" href="assets/icon.png">
   <!-- stamp:start -->
-  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=1b35d317b9","./js/audio-worklet.js":"./js/audio-worklet.js?v=1b35d317b9","./js/audio.js":"./js/audio.js?v=1b35d317b9","./js/bridge.js":"./js/bridge.js?v=1b35d317b9","./js/echo.js":"./js/echo.js?v=1b35d317b9","./js/history.js":"./js/history.js?v=1b35d317b9","./js/i18n.js":"./js/i18n.js?v=1b35d317b9","./js/model-files.js":"./js/model-files.js?v=1b35d317b9","./js/prompts.js":"./js/prompts.js?v=1b35d317b9","./js/segmenter.js":"./js/segmenter.js?v=1b35d317b9","./js/session.js":"./js/session.js?v=1b35d317b9","./js/transcriber.js":"./js/transcriber.js?v=1b35d317b9","./js/transcript.js":"./js/transcript.js?v=1b35d317b9","./js/whisper-core.js":"./js/whisper-core.js?v=1b35d317b9","./js/whisper-worker.js":"./js/whisper-worker.js?v=1b35d317b9"}}</script>
-  <link rel="stylesheet" href="css/app.css?v=1b35d317b9">
-  <script type="module" src="js/app.js?v=1b35d317b9"></script>
+  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=263eb84c08","./js/audio-worklet.js":"./js/audio-worklet.js?v=263eb84c08","./js/audio.js":"./js/audio.js?v=263eb84c08","./js/bridge.js":"./js/bridge.js?v=263eb84c08","./js/echo.js":"./js/echo.js?v=263eb84c08","./js/history.js":"./js/history.js?v=263eb84c08","./js/i18n.js":"./js/i18n.js?v=263eb84c08","./js/model-files.js":"./js/model-files.js?v=263eb84c08","./js/prompts.js":"./js/prompts.js?v=263eb84c08","./js/segmenter.js":"./js/segmenter.js?v=263eb84c08","./js/session.js":"./js/session.js?v=263eb84c08","./js/transcriber.js":"./js/transcriber.js?v=263eb84c08","./js/transcript.js":"./js/transcript.js?v=263eb84c08","./js/whisper-core.js":"./js/whisper-core.js?v=263eb84c08","./js/whisper-worker.js":"./js/whisper-worker.js?v=263eb84c08"}}</script>
+  <link rel="stylesheet" href="css/app.css?v=263eb84c08">
+  <script type="module" src="js/app.js?v=263eb84c08"></script>
   <!-- stamp:end -->
 </head>
 <body>
   <header class="topbar">
-    <img src="assets/icon.png" alt="" class="logo">
-    <h1 data-t="app_title">Assistente chiamate</h1>
+    <span class="wordmark" data-t="app_title">Assistente chiamate</span>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="call" class="active" data-t="tab_call">Chiamata</button>
       <button role="tab" data-tab="history" data-t="tab_history">Archivio</button>
@@ -26,7 +25,7 @@
   <main>
     <!-- CALL -->
     <section id="tab-call" class="tab active">
-      <div id="setup" class="card">
+      <div id="setup" class="setup">
         <div id="claude-box" class="claude-box">
           <div class="claude-head"><span id="claude-dot" class="dot"></span><strong id="claude-title"></strong></div>
           <p id="claude-text" class="hint"></p>
@@ -37,86 +36,88 @@
           </div>
           <div id="claude-settings-row" class="row hidden"><button id="go-settings" data-t="claude_go_settings"></button></div>
         </div>
-        <p id="setup-notice" class="notice hidden"></p>
-        <label class="field">
-          <span data-t="language">Lingua della chiamata</span>
-          <select id="call-language">
-            <option value="auto" data-t="lang_auto">Auto</option>
-            <option value="it" data-t="lang_it">Italiano</option>
-            <option value="en" data-t="lang_en">English</option>
-          </select>
-        </label>
-        <fieldset class="field">
-          <legend data-t="sources">Cosa ascoltare</legend>
-          <label class="check"><input type="checkbox" id="src-mic" checked> <span data-t="src_mic"></span></label>
-          <label class="check"><input type="checkbox" id="src-shared" checked> <span data-t="src_shared"></span></label>
+        <div class="card start-card">
+          <h2 data-t="setup_title">Nuova chiamata</h2>
+          <p id="setup-notice" class="notice hidden"></p>
+          <div class="start-grid">
+            <label class="field">
+              <span data-t="language">Lingua della chiamata</span>
+              <select id="call-language">
+                <option value="auto" data-t="lang_auto">Auto</option>
+                <option value="it" data-t="lang_it">Italiano</option>
+                <option value="en" data-t="lang_en">English</option>
+              </select>
+            </label>
+            <fieldset class="field sources">
+              <legend data-t="sources">Cosa ascoltare</legend>
+              <label class="switch"><input type="checkbox" id="src-mic" checked><span class="track"></span><span data-t="src_mic"></span></label>
+              <label class="switch"><input type="checkbox" id="src-shared" checked><span class="track"></span><span data-t="src_shared"></span></label>
+            </fieldset>
+          </div>
           <p class="hint" data-t="src_hint"></p>
-        </fieldset>
-        <div class="row">
-          <button id="start" class="primary big" data-t="btn_start">▶ Avvia</button>
-          <button id="demo" class="ghost" data-t="btn_demo">Demo</button>
+          <button id="start" class="primary big wide" data-t="btn_start">▶ Avvia</button>
+          <button id="demo" class="link" data-t="btn_demo">Demo</button>
         </div>
-        <p class="hint" data-t="privacy"></p>
+        <p class="hint center privacy" data-t="privacy"></p>
       </div>
 
-      <div id="live" class="panel hidden">
-        <div class="panel-head">
+      <div id="live" class="live hidden">
+        <div class="callbar">
           <span id="status-dot" class="dot"></span>
           <strong id="status">Pronto</strong>
-          <span id="timer" class="muted">00:00</span>
-          <span class="spacer"></span>
-          <button id="pip" class="ghost small" data-t="btn_pip">⧉</button>
-          <button id="stop" class="danger" data-t="btn_stop">■ Stop</button>
-        </div>
-        <div class="panel-sub">
-          <select id="live-language" aria-label="language">
+          <span id="timer" class="timer">00:00</span>
+          <select id="live-language" class="compact" aria-label="language">
             <option value="auto" data-t="lang_auto">Auto</option>
             <option value="it" data-t="lang_it">Italiano</option>
             <option value="en" data-t="lang_en">English</option>
           </select>
-          <span id="audio-info" class="muted small"></span>
-          <span id="latency" class="muted small" title=""></span>
-          <span id="bridge-state" class="bridge-state small hidden"></span>
+          <span id="latency" class="meta" title=""></span>
+          <span id="bridge-state" class="bridge-state meta hidden"></span>
           <span class="spacer"></span>
           <button id="ask-claude" class="ask" data-t="btn_ask_claude"></button>
+          <button id="pip" class="ghost icon-btn" data-t="btn_pip">⧉</button>
+          <button id="stop" class="danger" data-t="btn_stop">■ Stop</button>
         </div>
-        <p id="notice" class="notice hidden"></p>
+        <p id="audio-info" class="audio-info"></p>
         <p id="live-hint" class="live-hint"></p>
         <div id="live-body" class="live-body">
           <section id="claude-col" class="claude-col hidden" aria-live="polite">
             <p id="follow-state" class="follow-state"></p>
             <div id="meeting" class="meeting hidden"><strong id="meeting-title"></strong> <span id="meeting-goal" class="muted"></span></div>
-            <div class="section-head"><span data-t="sec_suggestions"></span><span class="spacer"></span><span id="sug-time" class="muted small"></span></div>
-            <p id="sug-topic" class="topic waiting"></p>
-            <div id="suggestions"></div>
-            <div id="questions-box" class="hidden">
-              <div class="section-head"><span data-t="sec_questions"></span><span class="spacer"></span><span id="questions-count" class="muted small"></span></div>
+            <div id="now" class="now">
+              <div class="now-head"><span id="sug-topic" class="topic waiting"></span><span id="sug-time" class="sug-time"></span></div>
+              <div id="suggestions" class="suggestions"></div>
+            </div>
+            <details id="questions-box" class="fold hidden" open>
+              <summary><span data-t="sec_questions"></span><span id="questions-count" class="count"></span></summary>
               <ul id="questions" class="questions"></ul>
-            </div>
-            <div id="sug-remember-box" class="hidden">
-              <div class="section-head"><span data-t="sec_remember"></span></div>
+            </details>
+            <details id="sug-remember-box" class="fold hidden" open>
+              <summary><span data-t="sec_remember"></span></summary>
               <ul id="remember" class="remember"></ul>
-            </div>
-            <div id="previous-box" class="hidden">
-              <div class="section-head"><span data-t="sec_previous"></span></div>
+            </details>
+            <details id="previous-box" class="fold hidden">
+              <summary><span data-t="sec_previous"></span></summary>
               <div id="previous" class="previous"></div>
-            </div>
+            </details>
           </section>
           <section class="transcript-col">
-            <div class="section-head"><span data-t="sec_transcript"></span></div>
+            <div class="col-head"><span data-t="sec_transcript"></span></div>
             <div id="transcript" class="transcript" aria-live="off"></div>
           </section>
         </div>
+        <div class="toasts"><p id="notice" class="notice toast hidden"></p></div>
       </div>
 
-      <div id="ended" class="card hidden">
+      <div id="ended" class="card ended hidden">
+        <div class="ended-mark">✓</div>
         <h2 data-t="ended_title"></h2>
         <p id="ended-meta" class="muted small"></p>
         <p id="ended-hint" class="hint"></p>
-        <div class="row">
-          <button id="summary-claude" class="ask" data-t="btn_summary_claude"></button>
+        <div class="row center">
+          <button id="summary-claude" class="primary" data-t="btn_summary_claude"></button>
           <button id="dl-transcript" data-t="download_transcript"></button>
-          <button id="new-call" class="primary" data-t="btn_new_call"></button>
+          <button id="new-call" class="ghost" data-t="btn_new_call"></button>
         </div>
         <p id="summary-claude-status" class="notice hidden"></p>
       </div>
@@ -124,13 +125,16 @@
 
     <!-- HISTORY -->
     <section id="tab-history" class="tab">
-      <div id="history" class="card"></div>
+      <div class="card">
+        <h2 data-t="tab_history">Archivio</h2>
+        <div id="history" class="history"></div>
+      </div>
     </section>
 
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab">
       <div class="card">
-        <h3 data-t="bridge_title"></h3>
+        <h2 data-t="bridge_title"></h2>
         <p class="hint"><span data-t="bridge_text"></span> <a id="bridge-howto" href="https://github.com/aaddabbo30-bit/transcript#set-it-up-once" target="_blank" rel="noopener" data-t="bridge_howto"></a></p>
         <div id="bridge-manual">
           <label class="field"><span data-t="bridge_url"></span><input id="bridge-url" type="url" placeholder="https://….workers.dev"></label>
@@ -143,28 +147,34 @@
           <div class="row"><button id="bridge-copy" data-t="bridge_copy"></button><button id="bridge-clear" class="ghost" data-t="bridge_clear"></button><button id="bridge-new-key" class="ghost" data-t="bridge_new_key"></button></div>
         </div>
         <p id="bridge-status" class="muted small"></p>
-        <div id="project-box" class="hidden">
+        <div id="project-box" class="sub hidden">
           <h3 data-t="project_title"></h3>
           <p class="hint" data-t="project_text"></p>
           <div class="row"><button id="project-copy" data-t="project_copy"></button><span id="project-status" class="muted small"></span></div>
         </div>
-        <label class="field"><span data-t="settings_claude_url"></span><input id="claude-url" type="url" placeholder="https://claude.ai/new"></label>
-        <p class="hint"><span data-t="settings_claude_url_hint"></span> <span id="claude-url-status" class="muted small"></span></p>
+        <div class="sub">
+          <label class="field"><span data-t="settings_claude_url"></span><input id="claude-url" type="url" placeholder="https://claude.ai/new"></label>
+          <p class="hint"><span data-t="settings_claude_url_hint"></span> <span id="claude-url-status" class="muted small"></span></p>
+        </div>
       </div>
       <div class="card">
+        <h2 data-t="settings_transcription"></h2>
         <label class="field"><span data-t="settings_whisper"></span>
           <select id="whisper-model"><option value="base">base</option><option value="small">small</option></select>
         </label>
         <p class="hint" data-t="settings_whisper_hint"></p>
-        <div class="manual-model">
-          <h3 data-t="manual_title"></h3>
+        <details id="manual-box" class="fold manual-model">
+          <summary data-t="manual_title"></summary>
           <p class="hint" data-t="manual_text"></p>
           <ol id="manual-links"></ol>
           <div class="row">
             <label class="button"><span data-t="manual_pick"></span><input id="manual-files" type="file" multiple accept=".onnx,.json,.wasm" hidden></label>
             <span id="manual-status" class="muted small"></span>
           </div>
-        </div>
+        </details>
+      </div>
+      <div class="card">
+        <h2 data-t="settings_interface"></h2>
         <label class="field"><span data-t="settings_ui"></span>
           <select id="ui-language"><option value="it">Italiano</option><option value="en">English</option></select>
         </label>
