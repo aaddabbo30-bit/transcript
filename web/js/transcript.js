@@ -89,7 +89,9 @@ export function collapseRepetitions(text, maxRepeats = 2) {
  * and avgLogprob (see whisper-core.js) say how sure Whisper was, when known.
  */
 export function cleanTranscription(text, { noSpeechProb = null, avgLogprob = null } = {}) {
-  const t = collapseRepetitions((text || "").replace(/\s+/g, " ").trim());
+  // "HMMMMMMM…": a held sound, or Whisper stuck on one letter; "hmm" is then a filler.
+  const held = (text || "").replace(/(\p{L})\1{3,}/gu, "$1$1");
+  const t = collapseRepetitions(held.replace(/\s+/g, " ").trim());
   const norm = normalize(t);
   if (!norm || ALWAYS_DROP.test(t) || LIKELY_INVENTED.has(norm) || FILLERS.has(norm)) return "";
   if (/^\[.*\]$|^\(.*\)$/.test(t)) return ""; // "[Musica]", "(applausi)"

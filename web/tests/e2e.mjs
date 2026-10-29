@@ -293,9 +293,15 @@ await step("app served by its bridge: connected by itself, last step in the Call
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
   assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant[\s\S]*follow_call[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
   assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat di Claude/);
-  // The meeting briefing (from the user's Cockpit artifact, or from Claude): its title and questions show above the suggestions.
+  // A new call starts without a briefing. Claude follows it: its first round has the call so far; the page shows it is following.
   assert.ok(await page.isHidden("#meeting"));
   assert.match(await page.textContent("#follow-state"), /^Claude non sta seguendo la call/);
+  const round = await readBridge(connector, "follow_call", {}, appEnv);
+  const [, tag] = /^Round 1 · call ([0-9a-z]+) · call time /.exec(round) || [];
+  assert.ok(tag, round);
+  assert.match(round, /This call has no briefing yet: every call starts without one\.[\s\S]*How to follow, every round:/);
+  await page.waitForFunction(() => /^Claude segue la call: giro 1, \d+ s fa$/.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
+  // The chat knows the meeting: Claude saves its briefing for this call. Its title and questions show above the suggestions.
   const briefing = await mcp(connector, "tools/call", {
     name: "set_meeting_context",
     arguments: {
@@ -304,17 +310,14 @@ await step("app served by its bridge: connected by itself, last step in the Call
       objectives: ["Data di inizio"],
       questions: ["Chi paga il trasloco?", "Quando si inizia?"],
       glossary: ["Giulia", "Navigli"],
+      call: tag,
     },
   }, appEnv);
-  assert.match(briefing.content[0].text, /^Briefing saved for «Offerta Milano»: 1 objectives, 2 questions, 2 glossary terms/);
+  assert.match(briefing.content[0].text, /^Briefing saved for «Offerta Milano»: 1 objectives, 2 questions, 2 glossary terms[\s\S]*for the call in progress/);
   await page.waitForSelector("#meeting:not(.hidden)", { timeout: 15000 });
   assert.equal(await page.textContent("#meeting-title"), "Offerta Milano");
   assert.equal(await page.textContent("#meeting-goal"), "Chiudere la data di inizio");
   assert.equal(await page.textContent("#questions-count"), "2 aperte su 2");
-  // Claude follows the call: its first round has the briefing and the call so far; the page shows it is following.
-  const round = await readBridge(connector, "follow_call", {}, appEnv);
-  assert.match(round, /^Round 1 · call time [\s\S]*Questions the user wants to ask or settle:\n- Chi paga il trasloco\?[\s\S]*How to follow, every round:/);
-  await page.waitForFunction(() => /^Claude segue la call: giro 1, \d+ s fa$/.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
   const shown = await mcp(connector, "tools/call", {
     name: "show_suggestions",
     arguments: {
@@ -325,9 +328,10 @@ await step("app served by its bridge: connected by itself, last step in the Call
       ],
       remember: ["Decidere entro venerdì"],
       answered: ["Chi paga il trasloco?"],
+      call: tag,
     },
   }, appEnv);
-  assert.match(shown.content[0].text, /^Shown in the Call Assistant window, next to the transcript\. Next: call follow_call with cursor=\d+\.$/);
+  assert.match(shown.content[0].text, new RegExp(`^Shown in the Call Assistant window, next to the transcript\\. Next: call follow_call with cursor="${tag}:\\d+"\\.$`));
   await page.waitForFunction(() => document.querySelectorAll("#suggestions .suggestion").length === 2, null, { timeout: 15000 });
   assert.equal(await page.textContent("#sug-topic"), "Giulia ha un'offerta di lavoro a Milano");
   assert.equal(await page.textContent("#suggestions .suggestion >> nth=0"), "DomandaQuando dovresti iniziare?serve la data per decidere");
@@ -391,6 +395,42 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.doesNotMatch(await readBridge(connector, "get_current_call", {}, appEnv), /Offerta Milano/);
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
+  await context.close();
+});
+
+await step("the bridge doesn't answer when the page opens: the call starts anyway, and Claude joins it when the bridge answers", async () => {
+  const context = await newContext();
+  const lateEnv = { DB: memoryD1(), ASSETS: appEnv.ASSETS };
+  let down = true;
+  await context.route("https://late.test/**", async (r) => {
+    const req = r.request();
+    if (down && new URL(req.url()).pathname.startsWith("/api/")) return r.abort("connectionrefused");
+    const res = await worker.fetch(
+      new Request(req.url(), { method: req.method(), body: ["GET", "HEAD"].includes(req.method()) ? undefined : req.postDataBuffer() }),
+      lateEnv,
+    );
+    await r.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
+  });
+  const page = await context.newPage();
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("https://late.test/?engine=scripted&speed=4");
+  await page.waitForFunction(() => /ponte/.test(document.querySelector("#claude-text").textContent), null, { timeout: 15000 });
+  await page.click("#demo");
+  await page.waitForFunction(() => document.querySelectorAll("#transcript .line").length > 1, null, { timeout: 20000 });
+  assert.ok(await page.isHidden("#claude-col"), "no bridge yet: no Claude column");
+  assert.equal((await page.textContent("#ask-claude")).trim(), "Chiedi a Claude ↗");
+  // The network is back: the page connects by itself, Claude's column appears, and the bridge gets the whole call so far.
+  down = false;
+  await page.waitForSelector("#claude-col:not(.hidden)", { timeout: 20000 });
+  assert.equal((await page.textContent("#ask-claude")).trim(), "Fai seguire a Claude ↗");
+  await page.waitForSelector("#bridge-state.ok", { timeout: 15000 });
+  const key = await page.evaluate(() => JSON.parse(localStorage.getItem("ca.settings.v1")).bridgeKey);
+  const text = await untilBridge(`https://late.test/mcp/${key}`, /Status: in progress[\s\S]*\[00:0\d\] (Me|Them): /, lateEnv);
+  assert.match(text, /\] Them: Ciao! Finalmente riusciamo a sentirci/, "the start of the call too");
+  assert.match(await readBridge(`https://late.test/mcp/${key}`, "follow_call", {}, lateEnv), /^Round 1 · call [0-9a-z]+ · /);
+  await page.click("#stop");
+  await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
+  await untilBridge(`https://late.test/mcp/${key}`, /Status: ended/, lateEnv);
   await context.close();
 });
 

@@ -264,9 +264,13 @@ test("bridge sync sends the call when it changes, reports trouble, marks the end
   // n: the order the line was heard in; lang: what Whisper heard.
   assert.deepEqual(calls[1].lines, [{ t: 3, speaker: "me", text: "Ciao Giulia", n: 1, lang: "it" }]);
   assert.deepEqual(states, ["ok", "error", "ok"]);
-  await sync.finish();
+  // The end of the call is tried again until the bridge has it: it tells Claude to stop following.
+  down = true;
+  setTimeout(() => (down = false), 30);
+  await sync.finish([20, 20, 20]);
   assert.equal(calls[2].status, "ended");
   assert.equal(calls[2].lines.length, 1);
+  assert.equal(calls.length, 3);
 });
 
 test("a page served by its bridge finds it at its own address", async () => {
@@ -286,6 +290,11 @@ test("a page served by its bridge finds it at its own address", async () => {
   // A bridge without its database is worth saying.
   const err = await sameOriginBridge(key, { origin: "https://x.me.workers.dev", fetchImpl: reply(500, { ok: false, error: "no_database" }) }).catch((e) => e);
   assert.equal(err.code, "no_database");
+  // No answer at all (the network, for a moment): the page asks again later.
+  const offline = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  assert.equal((await sameOriginBridge(key, { origin: "https://x.me.workers.dev", fetchImpl: offline }).catch((e) => e)).code, "unreachable");
 });
 
 test("bridge sync brings back Claude's suggestions for this call, once each", async () => {
@@ -528,6 +537,12 @@ test("the request to follow the call is the connector's own, and a Project's ins
   assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*set_meeting_context[\s\S]*merged[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
   assert.match(projectInstructions("it"), /follow_call senza cursor[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
   assert.match(projectInstructions("en"), /^You are my prompter/);
+});
+
+test("Whisper stuck on one letter is a held sound, not words", () => {
+  assert.equal(cleanTranscription(`H${"M".repeat(300)}`), "");
+  assert.equal(cleanTranscription("Sììììììì, certo"), "Sìì, certo");
+  assert.equal(cleanTranscription("Okay, thanks for that."), "Okay, thanks for that.");
 });
 
 test("the script of a call keeps every suggestion: newest first, by arrival, filtered, pinned, said-again ones once", () => {

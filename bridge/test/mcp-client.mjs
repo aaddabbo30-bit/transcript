@@ -15,7 +15,7 @@ const { StreamableHTTPClientTransport } = require("@modelcontextprotocol/sdk/cli
 async function inProcessBridge() {
   const { default: worker } = await import("../src/worker.js");
   const { memoryD1 } = await import("./d1.mjs");
-  const env = { DB: memoryD1() };
+  const env = { DB: memoryD1(), FOLLOW_WAIT_S: "1" };
   const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -68,12 +68,16 @@ assert.deepEqual(prompts.map((p) => p.title), ["Segui la chiamata", "Cosa dico a
 const prompt = await client.getPrompt({ name: "cosa_dico_adesso", arguments: {} });
 assert.match(prompt.messages[0].content.text, /^Sono in una chiamata adesso\.[\s\S]*Me: Sì, quando dovresti iniziare\?\n<\/call>$/);
 const round = await client.callTool({ name: "follow_call", arguments: {} });
-assert.match(round.content[0].text, /^Round 1 · call time 00:07 · in progress · 2 lines\.[\s\S]*cursor=2\./);
+const [, tag] = /^Round 1 · call ([0-9a-z]+) · call time 00:07 · in progress · 2 lines\./.exec(round.content[0].text) || [];
+assert.ok(tag, round.content[0].text);
+assert.match(round.content[0].text, new RegExp(`cursor="${tag}:2"\\.`));
 const shown = await client.callTool({
   name: "show_suggestions",
-  arguments: { topic: "Il lavoro a Milano", suggestions: [{ kind: "question", say: "Quando inizi?", why: "serve la data" }] },
+  arguments: { topic: "Il lavoro a Milano", suggestions: [{ kind: "question", say: "Quando inizi?", why: "serve la data" }], call: tag },
 });
-assert.match(shown.content[0].text, /^Shown in the Call Assistant window[\s\S]*cursor=2\./);
+assert.match(shown.content[0].text, new RegExp(`^Shown in the Call Assistant window[\\s\\S]*cursor="${tag}:2"\\.`));
+const next = await client.callTool({ name: "follow_call", arguments: { cursor: `${tag}:2` } });
+assert.match(next.content[0].text, /^Round 2 · nothing new/);
 await client.close();
 
 await fetch(`${bridge.base}/api/${key}/delete`, { method: "POST" });
