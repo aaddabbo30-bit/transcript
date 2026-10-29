@@ -19,9 +19,10 @@
 const KEY = /^[A-Za-z0-9_-]{24,128}$/;
 const KEEP_MS = 48 * 3600 * 1000;
 const KEEP_CALLS = 10;
-const KEEP_CONTEXT_MS = 14 * 24 * 3600 * 1000; // a briefing may be written days before the meeting
-const PREPARED_MS = 12 * 3600 * 1000; // a briefing saved with no call running is for a call starting within this
-const STALE_S = 120;
+const KEEP_CONTEXT_MS = KEEP_MS; // a briefing belongs to one call, and goes with it
+const STALE_S = 120; // a call the page hasn't been in touch with for this long is no longer in progress
+const TOUCH_MS = 15_000; // the page's polls keep its call in progress through silences, written at most this often
+const QUIET_GIVE_UP_S = 300; // follow_call keeps waiting this long for a page gone quiet before telling Claude to stop
 const MAX_BODY = 2_000_000;
 const MAX_LINES = 20000;
 const MAX_WAIT_S = 25; // get_current_call's wait_seconds, under the clients' request timeouts
@@ -37,7 +38,7 @@ const CORS = {
 const LANG_NAMES = { it: "Italian", en: "English" };
 const FOLLOW_TRIGGER_LINES = 3; // follow_call answers once this many new lines arrived
 const FOLLOW_SETTLE_S = 8; // or this long after the first new line
-const FOLLOW_NO_CALL_ROUNDS = 10; // rounds without a call before telling Claude to stop
+const FOLLOW_NO_CALL_ROUNDS = 12; // rounds (25 s each) waiting for the user to press Start before telling Claude to stop
 
 const TRANSCRIPT_NOTE =
   '"Me" lines are the user (their microphone); "Them" lines are the other people in the call, or a video the user is watching. ' +
@@ -52,16 +53,17 @@ const TOOLS = [
       "Follow the user's call live, round after round, and act as their prompter. Use it when the user asks you to follow the call " +
       "(«segui la chiamata», «follow the call»). Each round waits up to 25 s for new lines (it answers at once when the others ask " +
       "the user something) and says exactly what to do next: usually show_suggestions with what the user could say now, then " +
-      "follow_call again with the cursor it gives you. Leave cursor out the first time: that round brings the saved meeting briefing " +
-      "(complete it with set_meeting_context from what the conversation knows) and the call so far. Don't write in the chat between " +
-      "rounds; the user reads your suggestions in the Call Assistant window. " +
+      "follow_call again with the cursor it gives you. Leave cursor out the first time: that round picks the call in progress (or " +
+      "waits for the user to press Start) and brings its briefing, if one was saved for it, and the call so far. Each call starts " +
+      "without a briefing; the cursor keeps you on the call you started following, never the next one. Don't write in the chat " +
+      "between rounds; the user reads your suggestions in the Call Assistant window. " +
       TRANSCRIPT_NOTE,
     inputSchema: {
       type: "object",
       properties: {
         cursor: {
-          type: "integer",
-          description: "The cursor given by the previous round. Leave it out the first time.",
+          type: "string",
+          description: 'The cursor the previous round gave you, exactly as it is (like "mhc2kq1:57"). Leave it out the first time.',
         },
       },
     },
@@ -80,6 +82,10 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
+        call: {
+          type: "string",
+          description: 'The call this is for: the tag follow_call gives (the part of the cursor before the colon). Leave it out when not following a call.',
+        },
         topic: { type: "string", description: "What is being discussed right now, in a few words, in the user's language." },
         suggestions: {
           type: "array",
@@ -114,15 +120,19 @@ const TOOLS = [
     name: "set_meeting_context",
     title: "Save the meeting's briefing",
     description:
-      "Save the briefing of the meeting the user is preparing or is in: goal, participants, the user's constraints and positions, " +
-      "background (acronyms, state of the topics, notes), objectives, questions to ask, and a glossary of names and terms. Replaces " +
-      "the previous one, so merge: keep what the saved briefing (shown by follow_call) already has. Before following a call, add here " +
-      "what the conversation with the user says about this meeting: " +
-      "follow_call and get_current_call show it with the transcript, the Call Assistant page shows the open questions, and the " +
-      "glossary helps the transcription spell names and acronyms right.",
+      "Save the briefing of the call in progress: goal, participants, the user's constraints and positions, background (acronyms, " +
+      "state of the topics, notes), objectives, questions to ask, and a glossary of names and terms. It belongs to that call only: " +
+      "every call starts without one, and with no call in progress nothing is saved. Use what the conversation with the user says " +
+      "about this meeting, once follow_call has shown you the call. Replaces the call's previous briefing, so merge: keep what it " +
+      "already has. follow_call and get_current_call show it with the transcript, the Call Assistant page shows the open questions, " +
+      "and the glossary helps the transcription spell names and acronyms right.",
     inputSchema: {
       type: "object",
       properties: {
+        call: {
+          type: "string",
+          description: 'The call this is for: the tag follow_call gives (the part of the cursor before the colon). Leave it out when not following a call.',
+        },
         title: { type: "string" },
         goal: { type: "string", description: "What has to happen by the end of the meeting." },
         people: { type: "string", description: "Participants and their roles." },
@@ -197,17 +207,17 @@ const TOOLS = [
 // Claude» button copies the same text, see web/js/prompts.js).
 const FOLLOW_REQUEST =
   "Segui la mia call in diretta con il connector Call Assistant, fino alla fine, e fammi da suggeritore.\n" +
-  "1. Chiama follow_call senza cursor: ti mostra il briefing già salvato (se c'è) e la call fin qui.\n" +
-  "2. Se da questa chat sai del meeting cose che nel briefing mancano (obiettivi, domande che voglio fare, le mie posizioni e i miei limiti, " +
-  "le persone e i loro ruoli, il contesto, nomi, sigle e termini tecnici per il glossary), salvale con set_meeting_context unite a quelle " +
-  "già presenti: il briefing nuovo sostituisce il vecchio, quindi riportale tutte.\n" +
+  "1. Chiama follow_call senza cursor: prende la call in corso, o aspetta che io prema Avvia. Ogni call parte da zero, senza briefing.\n" +
+  "2. Se questa chat parla di questo meeting, salva con set_meeting_context quello che sai (obiettivi, domande che voglio fare, " +
+  "le mie posizioni e i miei limiti, le persone e i loro ruoli, il contesto, nomi, sigle e termini tecnici per il glossary), unito a " +
+  "quello già salvato per questa call, se c'è. Se la chat è nuova o parla d'altro, segui la call da quello che si dice, senza portarci altri meeting.\n" +
   "3. A ogni giro con qualcosa di nuovo chiama show_suggestions con 1-3 proposte che posso dire subito: se mi hanno appena chiesto qualcosa, " +
   "prima la risposta; poi domande che fanno avanzare i miei obiettivi, punti da sollevare, avvisi (rischi, impegni da non prendere). " +
   "«say» nella lingua che parlano gli altri, pronto da leggere ad alta voce; «why» in italiano, al massimo 10 parole. " +
   "Non ripetere proposte già fatte; segna in answered le domande del briefing che si sono chiarite.\n" +
-  "4. Subito dopo richiama follow_call con il cursor che ti ha dato, e così via.\n" +
+  "4. Subito dopo richiama follow_call con il cursor che ti ha dato, così resti su questa call, e così via.\n" +
   "Non scrivere nella chat durante la call: guardo la finestra dell'Assistente. Quando la call finisce scrivimi una riga e proponimi " +
-  "riassunto, decisioni e prossimi passi.";
+  "riassunto, decisioni e prossimi passi. Se in questa chat non hai gli strumenti di Call Assistant, dimmelo in una riga: va attivato il connector.";
 
 /** (A function: the Workers runtime accepts only handlers and functions as exports of the main module.) */
 export function followRequest() {
@@ -488,26 +498,71 @@ export function glossaryOf(ctx) {
   return out.slice(0, 40);
 }
 
-const startOf = (call) => {
-  const t = Date.parse(call.startedAt);
-  return Number.isFinite(t) ? t : (call.updatedAt ?? Date.now());
-};
-
 /**
- * The briefing that belongs to this call: saved while it ran, or prepared
- * before it started (and not yet used by another call). With no call, only a
- * briefing waiting for the next one. A new call never inherits the last one's.
+ * The briefing of this call. One is saved only while a call is in progress,
+ * and belongs to that call alone: every call starts without one.
  */
 export function briefingFor(ctx, call) {
-  if (!ctx) return null;
-  if (!call) return ctx.callId ? null : ctx;
-  if (ctx.callId) return ctx.callId === call.id ? ctx : null;
-  const start = startOf(call);
-  return ctx.updatedAt >= start - PREPARED_MS && ctx.updatedAt <= start + 60_000 ? ctx : null;
+  return ctx && call && ctx.callId === call.id ? ctx : null;
 }
 
-/** The call in progress: not ended, and the page still sending. */
+/** The call in progress: not ended, and the page still in touch (its polls keep it so through silences). */
 const liveCall = (calls, now) => calls.find((c) => c.status === "live" && (now - c.updatedAt) / 1000 <= STALE_S) || null;
+
+/** The newest call, by when it started. */
+const newestCall = (calls) => calls.reduce((a, c) => (!a || c.startedAt > a.startedAt ? c : a), null);
+
+/** "The current call" for reading it: the one in progress, else the newest. */
+const currentCall = (calls, now) => liveCall(calls, now) || newestCall(calls);
+
+/** A short tag for a call. follow_call's cursor carries it, so a chat stays on the call it started following. */
+export function callTag(id) {
+  const t = Date.parse(id);
+  if (Number.isFinite(t)) return t.toString(36);
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h.toString(36);
+}
+
+/** A call tag as Claude passes it (alone, or the whole cursor); null when there is none. */
+function tagArg(value) {
+  const m = /^\s*([a-z0-9]{1,16})(?::\d+)?\s*$/i.exec(String(value ?? ""));
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * follow_call's cursor: "<call tag>:<lines seen>". A bare number comes from
+ * rounds of an older version (the call those rounds were on); "0" while
+ * waiting for a call.
+ */
+export function parseCursor(value) {
+  if (value === undefined || value === null || value === "") return { given: false, tag: null, n: 0 };
+  const m = /^\s*([a-z0-9]{1,16}):(\d+)\s*$/i.exec(String(value));
+  if (m) return { given: true, tag: m[1].toLowerCase(), n: Number(m[2]) };
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? { given: true, tag: null, n } : { given: false, tag: null, n: 0 };
+}
+
+/**
+ * The call a write from Claude (show_suggestions, set_meeting_context) is for:
+ * the one its tag names, unless that call is over; with no tag, `fallback`.
+ */
+function callFor(calls, tag, fallback) {
+  if (!tag) return { call: fallback };
+  const named = calls.find((c) => callTag(c.id) === tag);
+  if (!named) return { unknown: `no call has the tag "${tag}": pass the tag from follow_call's cursor (the part before the colon), or leave call out` };
+  if (named.status === "ended") return { over: "has ended" };
+  if (newestCall(calls).id !== named.id) return { over: "is over: the user started a new call after it" };
+  return { call: named };
+}
+
+/** The page polls while its call runs: that keeps the call in progress through silences, when there are no new lines to send. */
+async function touchCall(db, room, id, now) {
+  await db
+    .prepare("UPDATE calls SET updated_at = ?3 WHERE room = ?1 AND id = ?2 AND status = 'live' AND updated_at < ?4")
+    .bind(room, id, now, now - TOUCH_MS)
+    .run();
+}
 
 async function saveContext(db, room, ctx, now) {
   await db
@@ -646,59 +701,67 @@ const FOLLOW_HOW =
   "2. Otherwise suggest what moves the user's open objectives and questions forward: the next question to ask (\"question\"), " +
   "a point to raise (\"point\"), or a warning (\"warning\": a risk, a commitment not to make, something that contradicts the briefing). " +
   "Be concrete and specific to what was just said; never generic.\n" +
-  "3. Call show_suggestions with 1-3 items, the most urgent first. Add \"remember\" for new names, numbers, dates, decisions and " +
+  "3. Call show_suggestions with 1-3 items, the most urgent first, and this call's tag. Add \"remember\" for new names, numbers, dates, decisions and " +
   "\"answered\" for briefing questions or objectives now settled. Skip show_suggestions only when the new lines are small talk, silence or noise.\n" +
-  "4. Call follow_call again with the cursor it gives you. Don't write in the chat until the call ends.";
+  "4. Call follow_call again with the cursor it gives you: it keeps you on this call. Don't write in the chat until the call ends.";
 
 /**
  * One round of follow_call: wait for something worth reacting to, then tell
  * Claude what is new, what is still open and exactly what to do next.
+ *
+ * The first round (no cursor) picks the call in progress, or waits for the
+ * user to press Start. From then on the cursor names that call: the rounds stay
+ * on it, and stop when it ends or a new call starts (that one is followed only
+ * when the user asks again, from the chat they choose).
  */
 async function followRound(args, ctx) {
   const { db, room, app, waitS } = ctx;
-  const given = args.cursor !== undefined && args.cursor !== null && args.cursor !== "" && Number.isInteger(Number(args.cursor));
-  const cursor = given ? Math.max(0, Number(args.cursor)) : 0;
+  const cur = parseCursor(args.cursor);
   let calls = await loadCalls(db, room, Date.now());
   const prev = await loadFollow(db, room);
-  // The call to follow: the one in progress, or the one these rounds were following (to report its end).
-  // A call that ended before Claude was asked to follow is not it: Claude waits for the new one.
-  const followed = (list) => {
-    const call = list[0];
-    if (!call) return null;
-    if (call.status === "live" && (Date.now() - call.updatedAt) / 1000 <= STALE_S) return call;
-    return given && prev && prev.callId === call.id ? call : null;
+  // A bare number from an older round: the call those rounds were on.
+  const oldId = cur.given && !cur.tag && cur.n > 0 && prev ? prev.callId : null;
+  const bound = Boolean(cur.tag || oldId);
+  const target = (list) =>
+    bound ? list.find((c) => (cur.tag ? callTag(c.id) === cur.tag : c.id === oldId)) || null : liveCall(list, Date.now());
+  const superseded = (list, call) => {
+    const top = newestCall(list);
+    return Boolean(top && top.id !== call.id && top.startedAt > call.startedAt);
   };
-  if (given) {
+  if (cur.given) {
     // Wait for new lines: at once when the others ask a question, else after a few lines or a few seconds.
+    // Before Start: until the user starts a call.
     const until = Date.now() + waitS * 1000;
     let firstSeen = null;
-    while (Date.now() < until) {
-      const call = followed(calls);
-      if (call && (call.status === "ended" || (Date.now() - call.updatedAt) / 1000 > STALE_S)) break;
-      if (call && prev && prev.callId !== call.id) break; // a new call started
-      const fresh = call ? newLines(call, cursor) : [];
-      if (fresh.length >= FOLLOW_TRIGGER_LINES || fresh.some(isQuestionToUser)) break;
-      if (fresh.length) {
-        firstSeen = firstSeen ?? Date.now();
-        if (Date.now() - firstSeen >= FOLLOW_SETTLE_S * 1000) break;
+    for (let i = Math.ceil((waitS * 1000) / WAIT_POLL_MS); i > 0 && Date.now() < until; i--) {
+      const call = target(calls);
+      if (!bound && call) break;
+      if (bound) {
+        if (!call || call.status === "ended" || superseded(calls, call)) break;
+        const fresh = newLines(call, cur.n);
+        if (fresh.length >= FOLLOW_TRIGGER_LINES || fresh.some(isQuestionToUser)) break;
+        if (fresh.length) {
+          firstSeen = firstSeen ?? Date.now();
+          if (Date.now() - firstSeen >= FOLLOW_SETTLE_S * 1000) break;
+        }
       }
-      await sleep(Math.min(WAIT_POLL_MS, until - Date.now()));
+      await sleep(Math.max(0, Math.min(WAIT_POLL_MS, until - Date.now())));
       calls = await loadCalls(db, room, Date.now());
     }
   }
   const now = Date.now();
-  const call = followed(calls);
-  const callId = call ? call.id : null;
-  const sameCall = Boolean(given && prev && prev.callId === callId);
-  const rounds = sameCall ? prev.rounds + 1 : 1;
-  const top = call ? lastN(call) : 0;
-  await saveFollow(db, room, { callId, rounds, readAt: now, cursor: top });
+  const call = target(calls);
+  const start = app ? ` at ${app}` : " in the Call Assistant page";
 
   if (!call) {
-    const start = app ? ` at ${app}` : " in the Call Assistant page";
+    if (bound) {
+      return "The call you were following is no longer kept by the bridge. Stop following, and tell the user in one line; they can ask you again.";
+    }
+    const rounds = cur.given && prev && !prev.callId ? prev.rounds + 1 : 1;
+    await saveFollow(db, room, { callId: null, rounds, readAt: now, cursor: 0 });
     return rounds >= FOLLOW_NO_CALL_ROUNDS
       ? `Round ${rounds} · still no call: the user hasn't pressed Start${start}. Stop following now and tell the user in one line to start the call and then ask you again.`
-      : `Round ${rounds} · no call in progress yet: the user hasn't pressed Start${start}. Call follow_call again with cursor=0 (it waits up to 25 s).`;
+      : `Round ${rounds} · no call in progress yet: waiting for the user to press Start${start}. Call follow_call again with cursor="0" (it waits up to 25 s).`;
   }
   const length = fmtTime(lengthOf(call));
   if (call.status === "ended") {
@@ -708,43 +771,63 @@ async function followRound(args, ctx) {
       "get_current_call with minutes = 0 reads the whole call."
     );
   }
-  const silentFor = Math.round((now - call.updatedAt) / 1000);
-  if (silentFor > STALE_S) {
+  if (bound && superseded(calls, call)) {
     return (
-      `The Call Assistant page hasn't sent anything for ${Math.round(silentFor / 60)} minutes: it may have been closed, ` +
-      "or the computer may be asleep. Stop following and tell the user in one line to check the page; then they can ask you again."
+      "The call you were following is over: the user started a new call after it. Stop following now, and send nothing more " +
+      "(no show_suggestions, no set_meeting_context): this conversation belongs to the call that ended. In the chat, tell the user " +
+      "in one line; to follow the new call, they press «Fai seguire a Claude» in the page and paste the request in the chat they choose."
     );
   }
+  const tag = callTag(call.id);
+  const rounds = prev && prev.callId === call.id ? prev.rounds + 1 : 1;
+  const top = lastN(call);
+  const cursor = `${tag}:${top}`;
+  await saveFollow(db, room, { callId: call.id, rounds, readAt: now, cursor: top });
+
+  const silentFor = Math.round((now - call.updatedAt) / 1000);
+  if (silentFor > QUIET_GIVE_UP_S) {
+    return (
+      `The Call Assistant page hasn't been in touch for ${Math.round(silentFor / 60)} minutes: it was probably closed, or the computer ` +
+      "is asleep or offline. Stop following and tell the user in one line to check the page; then they can ask you again."
+    );
+  }
+  if (silentFor > STALE_S) {
+    return `Round ${rounds} · the Call Assistant page hasn't been in touch for ${silentFor} s: it may be reconnecting. Keep waiting: call follow_call again with cursor="${bound ? `${tag}:${cur.n}` : cursor}".`;
+  }
+  const first = !bound; // this conversation starts following this call
+  const seen = first ? 0 : cur.n;
   const briefing = briefingFor(await loadContext(db, room, now), call);
   const others = othersLanguage(call);
   const user = LANG_NAMES[call.ui] || "Italian";
   const out = [];
-  out.push(`Round ${rounds} · call time ${length} · in progress · ${call.lines.length} lines.`);
+  out.push(`Round ${rounds} · call ${tag} · call time ${length} · in progress · ${call.lines.length} lines.`);
   out.push(`Languages: the others speak ${others}; the user's language is ${user}. Write "say" in ${others}; "why", "topic" and "remember" in ${user}.`);
-  const fresh = sameCall ? newLines(call, cursor) : call.lines.filter((l) => l.t >= lengthOf(call) - 180);
-  if (!sameCall) {
-    // First round for this call: the briefing, the call so far, the method.
-    out.push("", briefing ? describeContext(briefing).trim() : "No meeting briefing saved yet.");
+  const fresh = first ? call.lines.filter((l) => l.t >= lengthOf(call) - 180) : newLines(call, seen);
+  if (first) {
+    // The first round for this conversation: the briefing of this call, the call so far, the method.
+    out.push("", briefing ? describeContext(briefing).trim() : "This call has no briefing yet: every call starts without one.");
+    const what = "(objectives, questions the user wants to ask, their positions, the people, names and acronyms for the glossary)";
     out.push(
-      "If this conversation knows more about the meeting than the briefing above (objectives, questions the user wants to ask, their positions, " +
-        "the people, names and acronyms for the glossary), call set_meeting_context first with everything merged: it replaces the saved briefing, " +
-        "so keep what is already there.",
+      (briefing
+        ? `If this conversation knows more about this meeting than the briefing above ${what}, call set_meeting_context first with call="${tag}", merged with what is already there.`
+        : `If this conversation is about this meeting and knows things about it ${what}, call set_meeting_context first with call="${tag}".`) +
+        " It belongs to this call only. If this conversation is new or about something else, don't bring other meetings in: follow from what is said in the call.",
     );
     out.push("", fresh.length ? `The call so far (last 3 minutes, ${fresh.length} of ${call.lines.length} lines). ${TRANSCRIPT_NOTE}` : "Nothing has been said yet.");
     for (const l of fresh) out.push(lineText(l));
     out.push("", FOLLOW_HOW);
   } else if (!fresh.length) {
-    return `Round ${rounds} · nothing new in the last ${waitS} s. Call follow_call again with cursor=${top}.`;
+    return `Round ${rounds} · nothing new in the last ${waitS} s. Call follow_call again with cursor="${cursor}".`;
   } else {
     const shown = fresh.slice(-40);
     const firstT = Math.min(...shown.map((l) => l.t));
-    const context = call.lines.filter((l) => l.n <= cursor && l.t <= firstT).slice(-2);
+    const context = call.lines.filter((l) => l.n <= seen && l.t <= firstT).slice(-2);
     if (context.length) out.push("", "Just before (already seen):", ...context.map(lineText));
     out.push("", `New${shown.length < fresh.length ? ` (the last ${shown.length} of ${fresh.length})` : ""}:`, ...shown.map(lineText));
     const asked = shown.filter(isQuestionToUser).slice(-2);
     if (asked.length) out.push("", `They asked the user: ${asked.map((l) => `"${l.text}"`).join(" ")} Answer that first.`);
   }
-  if (briefing && sameCall) {
+  if (briefing && !first) {
     const { objectives, questions } = briefingItems(briefing);
     const open = (list) => list.filter((x) => !x.done).slice(0, 5).map((x) => `"${x.text.slice(0, 120)}"`);
     const q = open(questions);
@@ -760,7 +843,8 @@ async function followRound(args, ctx) {
   }
   out.push(
     "",
-    `Next: if the new lines give you anything useful, call show_suggestions (1-3 items, most urgent first); then call follow_call with cursor=${top}. Don't write in the chat.`,
+    `Next: if the new lines give you anything useful, call show_suggestions with call="${tag}" (1-3 items, most urgent first); ` +
+      `then call follow_call with cursor="${cursor}". Don't write in the chat.`,
   );
   return out.join("\n");
 }
@@ -802,39 +886,53 @@ async function callTool(name, args, ctx) {
     // Following the call: wait for new lines (or the end of the call) before answering.
     const wait = since === null ? 0 : Math.min(MAX_WAIT_S, Math.max(0, Number(args.wait_seconds) || 0));
     const until = Date.now() + wait * 1000;
-    const news = () => calls.length && (calls[0].lines.length > since || calls[0].status === "ended");
+    const news = () => {
+      const call = currentCall(calls, Date.now());
+      return call && (call.lines.length > since || call.status === "ended");
+    };
     while (wait && !news() && Date.now() < until) {
       await sleep(Math.min(WAIT_POLL_MS, until - Date.now()));
       calls = await loadCalls(db, room, Date.now());
     }
-    const briefing = describeContext(briefingFor(await loadContext(db, room, now), calls[0] || null));
-    if (!calls.length) return toolText(briefing + noCalls(app));
-    return toolText(briefing + describeCall(calls[0], minutesArg(args.minutes, 10), Date.now(), app, since));
+    const call = currentCall(calls, Date.now());
+    const briefing = describeContext(briefingFor(await loadContext(db, room, now), call));
+    if (!call) return toolText(noCalls(app));
+    return toolText(briefing + describeCall(call, minutesArg(args.minutes, 10), Date.now(), app, since));
   }
   if (name === "follow_call") return toolText(await followRound(args, ctx));
   if (name === "set_meeting_context") {
     const ctx = cleanContext(args);
     if (!ctx) return toolText("Nothing to save: give at least a title, a goal or some background.", true);
-    // It belongs to the call in progress; with none, to the next call the user starts.
-    const live = liveCall(calls, now);
-    ctx.callId = live ? live.id : null;
+    // It belongs to the call in progress, and to that call only.
+    const { call, over, unknown } = callFor(calls, tagArg(args.call), liveCall(calls, now));
+    if (unknown) return toolText(`Not saved: ${unknown}.`, true);
+    if (over) return toolText(`Not saved: the call you were following ${over}. Send nothing more for it.`, true);
+    if (!call) {
+      return toolText(
+        "Not saved: no call is in progress, and a briefing belongs to one call. Every call starts without one. " +
+          `Once the user presses Start${app ? ` at ${app}` : " in the Call Assistant page"}, follow_call shows you the call: save it then.`,
+        true,
+      );
+    }
+    ctx.callId = call.id;
     // Questions Claude already reported answered stay answered if they are still in the new briefing of the same call.
-    const before = await loadContext(db, room, now);
+    const before = briefingFor(await loadContext(db, room, now), call);
     const items = [...ctx.objectives, ...ctx.questions];
-    ctx.answered = before && before.callId === ctx.callId ? before.answered.filter((a) => items.some((i) => itemDone(i, [a]))) : [];
+    ctx.answered = before ? before.answered.filter((a) => items.some((i) => itemDone(i, [a]))) : [];
     await saveContext(db, room, ctx, Date.now());
     const terms = glossaryOf(ctx);
     return toolText(
       `Briefing saved${ctx.title ? ` for «${ctx.title}»` : ""}: ${ctx.objectives.length} objectives, ${ctx.questions.length} questions` +
-        `${terms.length ? `, ${terms.length} glossary terms for the transcription` : ""}, ` +
-        `${live ? "for the call in progress" : "for the next call the user starts (within 12 hours)"}. ` +
+        `${terms.length ? `, ${terms.length} glossary terms for the transcription` : ""}, for the call in progress (call ${callTag(call.id)}) only. ` +
         "follow_call and get_current_call show it with the transcript.",
     );
   }
   if (name === "show_suggestions") {
     const data = cleanSuggestions(args);
     if (!data) return toolText("Nothing to show: give at least one suggestion with kind and say.", true);
-    const call = calls[0];
+    const { call, over, unknown } = callFor(calls, tagArg(args.call), currentCall(calls, now));
+    if (unknown) return toolText(`Not shown: ${unknown}.`, true);
+    if (over) return toolText(`Not shown: the call you were following ${over}. Send nothing more for it, and stop following.`, true);
     await saveSuggestions(db, room, call ? call.id : null, data, Date.now());
     await markAnswered(db, room, data.answered, now, call || null);
     if (!call) return toolText(`Saved, but there is no call to show it next to.${app ? ` The user starts one at ${app}.` : ""}`);
@@ -842,7 +940,7 @@ async function callTool(name, args, ctx) {
       return toolText(`Saved with call ${call.id}, which has ended: the user sees it if that call is still open in the Call Assistant.`);
     }
     const follow = await loadFollow(db, room);
-    const next = follow && follow.callId === call.id ? ` Next: call follow_call with cursor=${follow.cursor}.` : "";
+    const next = follow && follow.callId === call.id ? ` Next: call follow_call with cursor="${callTag(call.id)}:${follow.cursor}".` : "";
     return toolText(`Shown in the Call Assistant window, next to the transcript.${next}`);
   }
   if (name === "list_calls") return toolText(describeList(calls, now, app));
@@ -858,8 +956,8 @@ async function getPrompt(name, ctx) {
   const prompt = PROMPTS.find((p) => p.name === name);
   if (!prompt) return null;
   const { db, room, now, app } = ctx;
-  const [call] = await loadCalls(db, room, now);
-  const briefing = describeContext(briefingFor(await loadContext(db, room, now), call || null));
+  const call = currentCall(await loadCalls(db, room, now), now);
+  const briefing = describeContext(briefingFor(await loadContext(db, room, now), call));
   const transcript = briefing + (call ? describeCall(call, prompt.minutes, now, app) : noCalls(app));
   return {
     description: prompt.description,
@@ -891,7 +989,8 @@ async function handleRpc(msg, ctx) {
             "When you suggest what to say during a call, also send it with show_suggestions: the user sees it next to the transcript. " +
             "When the user asks you to follow the call («segui la chiamata»), call follow_call and do what each round says: " +
             "it acts as their live prompter through show_suggestions, without writing in the chat. " +
-            "Complete the saved briefing with what the conversation knows about the meeting, through set_meeting_context (merged, with a glossary of names and terms)." +
+            "Every call starts without a briefing: while following it, save what the conversation knows about that meeting with " +
+            "set_meeting_context (with a glossary of names and terms); it belongs to that call only." +
             (ctx.app ? ` The Call Assistant page is at ${ctx.app}: the user opens it and presses Start to follow a call.` : ""),
         },
       };
@@ -958,10 +1057,12 @@ async function api(request, env, key, action) {
     return json({ ok: true, calls: calls.length });
   }
   if (action === "suggestions" && request.method === "GET") {
-    // ?call=<id>: what belongs to the page's own call (older pages leave it out: the latest call).
+    // ?call=<id>: what belongs to the page's own call (older pages leave it out: the current call).
+    // The page asks every few seconds while its call runs: that also keeps the call in progress through silences.
     const id = new URL(request.url).searchParams.get("call");
+    if (id) await touchCall(db, room, id, now);
     const calls = await loadCalls(db, room, now);
-    const call = id ? calls.find((c) => c.id === id) || { id, startedAt: id, updatedAt: now } : calls[0] || null;
+    const call = id ? calls.find((c) => c.id === id) || { id, startedAt: id, updatedAt: now } : currentCall(calls, now);
     const suggestions = await loadSuggestions(db, room);
     const follow = await loadFollow(db, room);
     return json({
@@ -981,14 +1082,8 @@ async function api(request, env, key, action) {
     }
     if (!call) return json({ ok: false, error: "bad_call" }, 400);
     await saveCall(db, room, call, now);
-    // A briefing prepared for the next call becomes this call's (so the call after it doesn't get it).
-    const ctx = await loadContext(db, room, now);
-    const briefing = briefingFor(ctx, call);
-    if (briefing && !briefing.callId) {
-      const { updatedAt, ...data } = briefing;
-      await saveContext(db, room, { ...data, callId: call.id }, updatedAt);
-    }
-    // The answer brings back what Claude asked to show for this call, if anything.
+    // The answer brings back what Claude asked to show for this call, and its briefing, if any.
+    const briefing = briefingFor(await loadContext(db, room, now), call);
     const suggestions = await loadSuggestions(db, room);
     const follow = await loadFollow(db, room);
     return json({

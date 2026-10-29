@@ -19,7 +19,9 @@ export function newBridgeKey() {
 /**
  * The bridge at the page's own address, when the page is served by it (the
  * repository deployed to Cloudflare as it is). null elsewhere, e.g. GitHub
- * Pages; a bridge there without its database throws BridgeError("no_database").
+ * Pages; a bridge there without its database throws BridgeError("no_database"),
+ * and no answer at all (the network, for a moment) BridgeError("unreachable"):
+ * worth asking again.
  */
 export async function sameOriginBridge(key, { origin = location.origin, fetchImpl, timeoutMs = 5000 } = {}) {
   if (!/^https:|^http:\/\/(localhost|127\.0\.0\.1)[:/]/.test(`${origin}/`)) return null;
@@ -28,7 +30,7 @@ export async function sameOriginBridge(key, { origin = location.origin, fetchImp
     await bridge.status();
     return bridge;
   } catch (err) {
-    if (err instanceof BridgeError && err.code === "no_database") throw err;
+    if (err instanceof BridgeError && (err.code === "no_database" || err.code === "unreachable")) throw err;
     return null;
   }
 }
@@ -204,11 +206,16 @@ export class BridgeSync {
     return this.busy;
   }
 
-  /** The call is over: one last send, marked as ended. */
-  async finish() {
+  /** The call is over: one last send, marked as ended (tried again a few times: it tells Claude to stop following). */
+  async finish(retryMs = [1000, 3000, 8000]) {
     this.stop();
     if (this.busy) await this.busy;
     await this.push(this.snapshot("ended"), "ended");
+    for (const ms of retryMs) {
+      if (this.sent === "ended") return;
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      await this.push(this.snapshot("ended"), "ended");
+    }
   }
 
   /** A new line: send it now (a moment later, to group lines that arrive together) instead of at the next tick. */

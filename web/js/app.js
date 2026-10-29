@@ -165,15 +165,19 @@ function renderSetup() {
   renderClaudeBox();
 }
 
-function resetLive() {
-  $("transcript").innerHTML = "";
-  // With the bridge, Claude's suggestions sit on the left of the transcript; without it, what to do instead.
+/** With the bridge, Claude's suggestions sit on the left of the transcript; without it, what to do instead. */
+function renderClaudeLayout() {
   const withClaude = bridgeActive();
   show($("claude-col"), withClaude);
   $("live-body").classList.toggle("two", withClaude);
   show($("live-hint"), !withClaude);
   $("live-hint").textContent = t("live_hint_copy");
   $("ask-claude").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
+}
+
+function resetLive() {
+  $("transcript").innerHTML = "";
+  renderClaudeLayout();
   $("ask-claude").classList.remove("attention");
   shownSuggestions = null;
   script = new SuggestionScript();
@@ -240,21 +244,9 @@ async function startCall({ demo = false } = {}) {
   bridgeSync = null;
   try {
     await session.start();
-    if (bridgeActive()) {
-      bridgeSync = new BridgeSync({
-        bridge: makeBridge(),
-        session,
-        onState: setBridgeState,
-        onSuggestions: showSuggestions,
-        onFollow: showFollow,
-        onMeeting: (m) => {
-          showMeeting(m);
-          // The meeting's names and terms help Whisper spell them right.
-          if (session) session.setGlossary(m ? m.glossary : []);
-        },
-      });
-      bridgeSync.start();
-    }
+    attachBridge();
+    // Not connected yet (the network, for a moment): keep trying; Claude joins as soon as the bridge answers.
+    if (!bridgeActive()) connectHere();
   } catch (err) {
     const text = err instanceof CaptureError && t(err.code) !== err.code ? t(err.code) : t("capture_failed", { error: err.message });
     session.abort();
@@ -264,6 +256,29 @@ async function startCall({ demo = false } = {}) {
     document.body.classList.remove("in-call");
     setNotice($("setup-notice"), text, "error");
   }
+}
+
+/**
+ * Send the running call to the bridge, and show what Claude sends back. Also
+ * when the bridge connects in the middle of the call: it gets the whole call so far.
+ */
+function attachBridge() {
+  if (!session || session.done || bridgeSync || !bridgeActive()) return;
+  renderClaudeLayout();
+  bridgeSync = new BridgeSync({
+    bridge: makeBridge(),
+    session,
+    onState: setBridgeState,
+    onSuggestions: showSuggestions,
+    onFollow: showFollow,
+    onMeeting: (m) => {
+      showMeeting(m);
+      // The meeting's names and terms help Whisper spell them right.
+      if (session) session.setGlossary(m ? m.glossary : []);
+    },
+  });
+  bridgeSync.start();
+  renderFollow();
 }
 
 function handleEvent(kind, payload) {
@@ -373,7 +388,7 @@ function renderFollow() {
   $("ask-claude").classList.toggle("attention", state !== "on");
 }
 
-/** The briefing (the Cockpit, or Claude with set_meeting_context): title, goal, and its questions, ticked when answered. */
+/** The call's briefing (Claude saves it with set_meeting_context): title, goal, and its questions, ticked when answered. */
 function showMeeting(m) {
   show($("meeting"), Boolean(m && (m.title || m.goal)));
   $("meeting-title").textContent = (m && m.title) || "";
@@ -733,8 +748,16 @@ function bridgeMessage(err) {
   return t({ unreachable: "bridge_unreachable", not_found: "bridge_not_found", no_database: "bridge_no_db" }[code] || "bridge_failed");
 }
 
-/** Served by its own bridge (the repository deployed to Cloudflare): connect without asking. */
+/**
+ * Served by its own bridge (the repository deployed to Cloudflare): connect
+ * without asking. When the bridge doesn't answer (the network, for a moment),
+ * ask again a little later, also during a call: Claude joins it then.
+ */
+let bridgeRetry = null;
+let bridgeRetryMs = 5000;
 async function connectHere() {
+  clearTimeout(bridgeRetry);
+  bridgeRetry = null;
   if (!settings.bridgeKey) {
     settings.bridgeKey = newBridgeKey();
     saveSettings();
@@ -743,12 +766,21 @@ async function connectHere() {
     const bridge = await sameOriginBridge(settings.bridgeKey);
     if (bridge) {
       bridgeHere = true;
+      bridgeProblem = "";
+      bridgeRetryMs = 5000;
       settings = { ...settings, bridgeUrl: bridge.url, bridgeOn: true };
       saveSettings();
+      attachBridge();
     }
   } catch (err) {
-    bridgeHere = true;
-    bridgeProblem = bridgeMessage(err);
+    const away = err instanceof BridgeError && err.code === "unreachable";
+    if (!away) bridgeHere = true;
+    // Connected before on this browser: the call syncs anyway and retries by itself.
+    bridgeProblem = away && bridgeActive() ? "" : bridgeMessage(err);
+    if (away && !bridgeActive()) {
+      bridgeRetry = setTimeout(connectHere, bridgeRetryMs);
+      bridgeRetryMs = Math.min(bridgeRetryMs * 2, 60000);
+    }
   }
   renderClaudeBox();
   if ($("tab-settings").classList.contains("active")) renderBridge();
@@ -905,6 +937,7 @@ function wire() {
       saveSettings();
       renderBridge(t("bridge_ok"));
       renderClaudeBox();
+      attachBridge(); // a call already running: Claude can follow it from now
     } catch (err) {
       $("bridge-status").textContent = bridgeMessage(err);
     }
@@ -915,6 +948,7 @@ function wire() {
     if (bridgeSync) bridgeSync.stop();
     bridgeSync = null;
     setBridgeState(null);
+    if (session && !session.done) renderClaudeLayout();
     renderBridge(t("bridge_off_done"));
     renderClaudeBox();
   });
