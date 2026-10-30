@@ -228,12 +228,14 @@ test("deployed with the web app: the page, a link to it for Claude, old /web/ li
   await b.call("POST", `/api/${KEY}/call`, { id: "x", status: "ended", lines: lines(2) });
   assert.match((await b.tool("get_current_call")).text, new RegExp(`Status: ended\\. To follow a new call, the user opens the Call Assistant at ${BASE}/`));
   // The API and MCP still answer before the static files.
-  assert.deepEqual((await b.call("GET", `/api/${KEY}/status`)).data, { ok: true, calls: 1 });
+  // The page's status says where the app is: a copy of the page elsewhere goes there.
+  assert.deepEqual((await b.call("GET", `/api/${KEY}/status`)).data, { ok: true, calls: 1, app: `${BASE}/` });
   assert.equal(assets.length, 2);
 
   // The bridge alone (Deploy button): no page, no link.
   const alone = bridge();
   assert.doesNotMatch((await alone.tool("get_current_call")).text, /https?:/);
+  assert.deepEqual((await alone.call("GET", `/api/${KEY}/status`)).data, { ok: true, calls: 0 });
   assert.equal((await alone.call("GET", "/web/x")).status, 404);
 });
 
@@ -459,8 +461,12 @@ test("follow_call stays on its call: silences, a page gone quiet, a new call, ro
 
   const empty = bridge();
   let text = "";
-  for (let i = 0; i < 12; i++) text = (await empty.tool("follow_call", i ? { cursor: "0" } : {})).text;
+  const texts = [];
+  for (let i = 0; i < 12; i++) texts.push((text = (await empty.tool("follow_call", i ? { cursor: "0" } : {})).text));
   assert.match(text, /^Round 12 · still no call[\s\S]*Stop following now/);
+  // After a few rounds: if the page says it is listening, it sends to another address than this connector.
+  assert.doesNotMatch(texts[1], /another address/);
+  assert.match(texts[2], /If the user says the page is already listening, it is sending to another address than this connector: the connector address on claude\.ai must be the one in the page's Settings\./);
 });
 
 test("briefing helpers: done items, glossary for the transcription, cursors", () => {

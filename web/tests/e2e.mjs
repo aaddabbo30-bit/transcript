@@ -449,8 +449,24 @@ await step("the bridge doesn't answer when the page opens: the call starts anywa
   await context.close();
 });
 
+await step("a copy of the page elsewhere, whose bridge serves the page too, goes to the bridge's own page", async () => {
+  const context = await newContext();
+  await routeBridge(context);
+  // As on GitHub Pages: this copy was connected, in its Settings, to a bridge deployed with the app.
+  await context.addInitScript((origin) => {
+    if (location.origin !== origin) return;
+    localStorage.setItem("ca.settings.v1", JSON.stringify({ uiLanguage: "it", bridgeUrl: "https://app.test", bridgeOn: true, bridgeKey: "C".repeat(32) }));
+  }, new URL(base).origin);
+  const page = await context.newPage();
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto(`${base}?engine=scripted`);
+  await page.waitForURL("https://app.test/?engine=scripted", { timeout: 15000 });
+  await page.waitForFunction(() => /^Sei sulla pagina del tuo ponte \(app\.test\): è quella collegata a Claude\./.test(document.querySelector("#setup-notice").textContent));
+  await context.close();
+});
+
 await step("bridge at another address (e.g. the app on GitHub Pages): connect it in Settings", async () => {
-  const page = await newPage("?engine=scripted");
+  const page = await newPage("?engine=scripted&unseen=1500");
   await routeBridge(page.context());
   await claudeTitle(page, /^Claude non è collegato$/);
   await page.click("#go-settings");
@@ -480,6 +496,12 @@ await step("bridge at another address (e.g. the app on GitHub Pages): connect it
   // «Let Claude follow» copies only the request: Claude reads the call itself.
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
   assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant/);
+  // No round reaches this call (Claude's connector reads another address): the page says so, and copies this page's.
+  await page.waitForFunction(() => /^Claude non vede ancora questa chiamata\./.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
+  assert.doesNotMatch(await page.textContent("#follow-state"), /mcp\//, "the secret address stays off screen");
+  await page.click("#follow-state button");
+  assert.equal(await clipboard(page), connector);
+  assert.match(await page.textContent("#notice"), /^Copiato\. Su claude\.ai: Impostazioni → Connettori/);
 
   await page.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });

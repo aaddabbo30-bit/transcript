@@ -17,8 +17,9 @@ import { fmtTime, parseTranscript } from "./transcript.js";
 // The live panel can be in the always-on-top window (see openPip), outside this document.
 const $ = (id) => document.getElementById(id) || (pipWindow && pipWindow.document.getElementById(id));
 const params = new URLSearchParams(location.search);
-// Test hooks: ?engine=scripted (no Whisper download), ?speed=N (demo speed).
+// Test hooks: ?engine=scripted (no Whisper download), ?speed=N (demo speed), ?unseen=ms (see renderFollow).
 const TEST_ENGINE = params.get("engine");
+const UNSEEN_MS = Number(params.get("unseen")) || 60000;
 
 const SETTINGS_KEY = "ca.settings.v1";
 const DEFAULTS = {
@@ -204,6 +205,8 @@ function resetLive() {
   renderClaudeLayout();
   $("ask-claude").classList.remove("attention");
   shownSuggestions = null;
+  followAskedAt = 0;
+  $("follow-state").dataset.text = "";
   script = new SuggestionScript();
   scriptFilter = "all";
   showMeeting(null);
@@ -428,6 +431,7 @@ function renderLatency() {
 /** Whether Claude is following the call (follow_call reads), refreshed every second by tick(). */
 let following = null;
 let seenCursor = 0; // the lines Claude had read when its last suggestions arrived
+let followAskedAt = 0; // when the user copied the request to follow this call
 function showFollow(f) {
   following = f;
   renderFollow();
@@ -451,13 +455,30 @@ function renderFollow() {
   const el = $("follow-state");
   if (!bridgeActive()) {
     el.textContent = "";
+    el.dataset.text = "";
     return;
   }
   // A round waits up to 25 s for new lines, and Claude then takes a while to answer (longer with extended thinking).
   const ago = following ? Math.max(0, Math.round((Date.now() - following.readAt) / 1000)) : null;
   const state = ago === null ? "off" : ago <= 120 ? "on" : "lost";
+  // Asked to follow a minute ago, and no round reached this call: Claude's connector reads another address.
+  const unseen = state === "off" && followAskedAt && Date.now() - followAskedAt > UNSEEN_MS;
+  const text = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t(unseen ? "follow_unseen" : "follow_off");
   el.className = `follow-state ${state === "on" ? "on" : "off"}`;
-  el.textContent = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t("follow_off");
+  if (el.dataset.text !== text) {
+    el.dataset.text = text;
+    el.textContent = text;
+    if (unseen) {
+      // The address stays off screen (the screen may be shared): one tap copies it.
+      const copy = document.createElement("button");
+      copy.className = "plain";
+      copy.textContent = t("copy_connector");
+      copy.addEventListener("click", async (e) => {
+        if (await copyText(makeBridge().connectorUrl, e.view || window)) setNotice($("notice"), t("connector_copied"), "ok");
+      });
+      el.append(" ", copy);
+    }
+  }
   $("ask-claude").classList.toggle("attention", state !== "on");
   renderThinking();
 }
@@ -804,6 +825,7 @@ async function askClaude(e) {
   }
   // With the bridge: the request to follow the call (Claude reads it and sends suggestions here); without: the transcript.
   const follow = bridgeActive();
+  if (follow && !following) followAskedAt = Date.now();
   const text = follow ? chatConnectorPrompt(settings.uiLanguage, "follow") : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines });
   if (await sendToClaude(text, view, !claudeOpened)) setNotice($("notice"), t(follow ? "follow_copied" : "ask_copied"), "ok");
   else setNotice($("notice"), t("ask_copy_failed"), "error");
@@ -862,6 +884,8 @@ async function connectHere() {
       settings = { ...settings, bridgeUrl: bridge.url, bridgeOn: true };
       saveSettings();
       attachBridge();
+    } else if (await goToBridgeApp()) {
+      return;
     }
   } catch (err) {
     const away = err instanceof BridgeError && err.code === "unreachable";
@@ -875,6 +899,25 @@ async function connectHere() {
   }
   renderClaudeBox();
   if ($("tab-settings").classList.contains("active")) renderBridge();
+}
+
+/**
+ * A copy of the page at another address (GitHub Pages, say) whose bridge also
+ * serves the page: go there. The connector on claude.ai goes with that page
+ * (the same bridge key), so Claude sees its calls; this copy has its own
+ * settings and key, which Claude doesn't read.
+ */
+async function goToBridgeApp() {
+  if (!bridgeActive() || session) return false;
+  try {
+    const { app } = await makeBridge().status();
+    const there = app && new URL(app);
+    if (!there || there.origin === location.origin || session) return false;
+    location.replace(`${there.origin}${there.pathname}${location.search}#moved`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function renderBridge(note = "") {
@@ -894,6 +937,11 @@ function setBridgeState(state) {
   const el = $("bridge-state");
   el.className = `bridge-state meta ${state || ""}`;
   el.textContent = state === "ok" ? t("bridge_live_ok") : state === "error" ? t("bridge_live_error") : "";
+  try {
+    el.title = state ? new URL(settings.bridgeUrl).host : "";
+  } catch {
+    el.title = "";
+  }
   show(el, Boolean(state));
   if (state === "error") setNotice($("notice"), t("bridge_down"), "warn");
 }
@@ -1126,6 +1174,11 @@ wire();
 renderSetup();
 renderClaudeBox(!bridgeActive());
 connectHere();
+// Arrived from a copy of the page at another address: this is the one that goes with Claude's connector.
+if (location.hash === "#moved") {
+  setNotice($("setup-notice"), t("moved_here", { host: location.host }), "ok");
+  history.replaceState(null, "", location.pathname + location.search);
+}
 
 // The segmented control's selection, placed at once, then sliding (also when the bar comes back after a call).
 placeThumb();

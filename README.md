@@ -86,6 +86,7 @@ The connector address contains a secret key made by the page and kept in that br
    - Above them: whether Claude is following (*Claude is following the call: round 12, 6 s ago*), and the briefing's questions, ticked when answered.
    - The first time, claude.ai asks to allow the connector's tools: choose **Always allow**, or it asks again at every round.
    - Claude doesn't write in the chat during the call. It stops when the call ends and offers a summary, decisions and next steps. If the page says Claude stopped reading, press **Fai seguire a Claude ↗** again and paste in the same chat, or write «continua» there.
+   - **Use one address for the page: your bridge's** (for example `https://<name>.<you>.workers.dev`). Each address keeps its own settings, and with them its own bridge key, and the connector on claude.ai reads only the calls sent with its key. A copy of the page elsewhere (GitHub Pages) that is connected to a bridge serving the page goes there by itself. If a minute after **Fai seguire a Claude ↗** no round of Claude has reached the call, the page says so, with a button that copies the connector address this page uses (it stays off screen, in case you share your screen): put it in the connector on claude.ai. Claude, when it finds no call while you say the page is listening, says the same.
    - Silences don't stop it: the page stays in touch with the bridge even when nobody speaks. If the page loses the network for a moment, Claude waits for it (up to 5 minutes). If the bridge doesn't answer when you open the page, the call starts anyway and Claude's column appears as soon as the bridge answers, with the whole call so far.
    - The connector also has prompts (**«Segui la chiamata»**, **«Cosa dico adesso?»**, **«Cosa mi hanno chiesto?»**, **«Riassumi la chiamata»**, under the chat's **+** button), but claude.ai doesn't show a custom connector's prompts everywhere. The button and the written request always work.
    - **Tip:** in **Settings → Instructions for a Claude Project**, copy the instructions into a claude.ai Project (e.g. «Calls») and prepare each meeting in a chat of that Project: every chat then knows how to follow a call.
@@ -122,7 +123,7 @@ They are stored in that browser's cache, so the app finds them there. The status
 
 ### Other ways to set it up
 
-- **App on GitHub Pages, bridge alone.** The `web/` folder is also published with GitHub Pages: for this repository at <https://aaddabbo30-bit.github.io/transcript/>. That page isn't served by a bridge, so connect one in **Settings → Connection to Claude**: paste the bridge's address and press **Connect and test**. A bridge alone can be made with this button, which copies the [`bridge/`](bridge/) folder into a new repository of yours:
+- **App on GitHub Pages, bridge alone.** The `web/` folder is also published with GitHub Pages: for this repository at <https://aaddabbo30-bit.github.io/transcript/>. That page isn't served by a bridge, so connect one in **Settings → Connection to Claude**: paste the bridge's address and press **Connect and test**. If that bridge serves the page too (the repository deployed as it is), the copy goes to the bridge's own page when it opens: use that one, whose key the connector has. A bridge alone can be made with this button, which copies the [`bridge/`](bridge/) folder into a new repository of yours:
 
   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/aaddabbo30-bit/transcript/tree/main/bridge)
 
@@ -415,7 +416,8 @@ Tests:
 - `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording. It covers:
   - the app served by its bridge: it connects by itself, shows the connector step, copies the request to follow the call, Claude's side follows the call over MCP and the page shows it (and that Claude is thinking), the suggestions Claude sends (with show_suggestions, or with the next follow_call round) appear left of the transcript, the earlier ones stay in the script (filters, pins, copy, the list after the call), the briefing's questions are ticked when answered, and a new call starts without the last call's briefing or suggestions;
   - a bridge that doesn't answer when the page opens: the call starts anyway, and Claude's column appears with the whole call as soon as the bridge answers;
-  - a bridge at another address, connected in Settings;
+  - a copy of the page at another address going to the page of its bridge, when the bridge serves the page;
+  - a bridge at another address, connected in Settings, and the page saying so when no round of Claude reaches the call;
   - *Ask Claude* without a bridge, the microphone's meter moving with the voice, the end of a call, the history and the transcript download;
   - the always-on-top window, the model loaded by hand, and the version stamp of every script, including the Whisper worker.
 
@@ -464,7 +466,7 @@ This project was built in a cloud environment without a sound card, without Wind
 - **Reviewed, not executed**: the Windows-only code (installer, WASAPI capture, registry and shortcut code) was checked line by line against the PyAudioWPatch source and Windows PowerShell 5.1 rules.
 - **Needs a real Windows PC to verify**: live capture from your microphone and speakers, actual Whisper transcription quality/speed on your hardware, and the desktop shortcut. `Verifica installazione.bat` checks the first two quickly.
 - **Web app and bridge**:
-  - tested by unit tests, the official MCP client, 8 browser scenarios with a fake microphone, and the decoding with the real Whisper model (see above);
+  - tested by unit tests, the official MCP client, 9 browser scenarios with a fake microphone, and the decoding with the real Whisper model (see above);
   - in CI the bridge also runs on Cloudflare's local runtime (`wrangler dev`), alone and together with the app;
   - not covered by tests: claude.ai itself (adding the connector, where its prompts appear, how long a chat keeps following a call), a real call's acoustics (speakers, rooms, headsets: the echo detection is tested on a recording with simulated speakers and reverb), and the deploy on a real Cloudflare account.
 
