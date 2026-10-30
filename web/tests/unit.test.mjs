@@ -534,7 +534,7 @@ test("bridge sync: whether Claude follows this call, and the briefing with its q
 
 test("the request to follow the call is the connector's own, and a Project's instructions come in both languages", () => {
   assert.equal(chatConnectorPrompt("it", "follow"), followRequest());
-  assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*set_meeting_context[\s\S]*merged[\s\S]*show_suggestions[\s\S]*cursor it gave you/);
+  assert.match(chatConnectorPrompt("en", "follow"), /follow_call without a cursor[\s\S]*set_meeting_context[\s\S]*merged[\s\S]*follow_call again right away with the cursor it gave you, and put in it the suggestions/);
   assert.match(projectInstructions("it"), /follow_call senza cursor[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
   assert.match(projectInstructions("en"), /^You are my prompter/);
 });

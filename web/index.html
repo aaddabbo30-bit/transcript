@@ -2,19 +2,23 @@
 <html lang="it">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <title>Assistente chiamate</title>
   <meta name="description" content="Assistente per chiamate e video: trascrive nel browser con Whisper e Claude legge la chiamata dalla tua chat.">
   <link rel="icon" href="assets/icon.png">
   <!-- stamp:start -->
-  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=f9bdb5432e","./js/audio-worklet.js":"./js/audio-worklet.js?v=f9bdb5432e","./js/audio.js":"./js/audio.js?v=f9bdb5432e","./js/bridge.js":"./js/bridge.js?v=f9bdb5432e","./js/echo.js":"./js/echo.js?v=f9bdb5432e","./js/history.js":"./js/history.js?v=f9bdb5432e","./js/i18n.js":"./js/i18n.js?v=f9bdb5432e","./js/model-files.js":"./js/model-files.js?v=f9bdb5432e","./js/prompts.js":"./js/prompts.js?v=f9bdb5432e","./js/script.js":"./js/script.js?v=f9bdb5432e","./js/segmenter.js":"./js/segmenter.js?v=f9bdb5432e","./js/session.js":"./js/session.js?v=f9bdb5432e","./js/transcriber.js":"./js/transcriber.js?v=f9bdb5432e","./js/transcript.js":"./js/transcript.js?v=f9bdb5432e","./js/whisper-core.js":"./js/whisper-core.js?v=f9bdb5432e","./js/whisper-worker.js":"./js/whisper-worker.js?v=f9bdb5432e"}}</script>
-  <link rel="stylesheet" href="css/app.css?v=f9bdb5432e">
-  <script type="module" src="js/app.js?v=f9bdb5432e"></script>
+  <script type="importmap">{"imports":{"./js/app.js":"./js/app.js?v=93c1491ac9","./js/audio-worklet.js":"./js/audio-worklet.js?v=93c1491ac9","./js/audio.js":"./js/audio.js?v=93c1491ac9","./js/bridge.js":"./js/bridge.js?v=93c1491ac9","./js/echo.js":"./js/echo.js?v=93c1491ac9","./js/history.js":"./js/history.js?v=93c1491ac9","./js/i18n.js":"./js/i18n.js?v=93c1491ac9","./js/model-files.js":"./js/model-files.js?v=93c1491ac9","./js/motion.js":"./js/motion.js?v=93c1491ac9","./js/prompts.js":"./js/prompts.js?v=93c1491ac9","./js/script.js":"./js/script.js?v=93c1491ac9","./js/segmenter.js":"./js/segmenter.js?v=93c1491ac9","./js/session.js":"./js/session.js?v=93c1491ac9","./js/transcriber.js":"./js/transcriber.js?v=93c1491ac9","./js/transcript.js":"./js/transcript.js?v=93c1491ac9","./js/whisper-core.js":"./js/whisper-core.js?v=93c1491ac9","./js/whisper-worker.js":"./js/whisper-worker.js?v=93c1491ac9"}}</script>
+  <link rel="stylesheet" href="css/app.css?v=93c1491ac9">
+  <script type="module" src="js/app.js?v=93c1491ac9"></script>
   <!-- stamp:end -->
 </head>
 <body>
   <header class="topbar">
-    <nav class="tabs" role="tablist">
+    <nav class="tabs segmented" role="tablist">
+      <span class="seg-thumb" aria-hidden="true"></span>
       <button role="tab" data-tab="call" class="active" data-t="tab_call">Chiamata</button>
       <button role="tab" data-tab="history" data-t="tab_history">Archivio</button>
       <button role="tab" data-tab="settings" data-t="tab_settings">Impostazioni</button>
@@ -25,57 +29,75 @@
     <!-- CALL -->
     <section id="tab-call" class="tab active">
       <div id="setup" class="setup">
-        <div id="claude-box" class="claude-box">
-          <div class="claude-head"><span id="claude-dot" class="dot"></span><strong id="claude-title"></strong></div>
-          <p id="claude-text" class="hint"></p>
-          <div id="claude-connector-row" class="row hidden">
+        <h1 class="large-title" data-t="setup_title">Nuova chiamata</h1>
+        <p id="setup-notice" class="notice hidden"></p>
+
+        <div id="claude-box" class="group claude-box">
+          <div class="cell claude-head">
+            <span class="claude-icon" aria-hidden="true"><span id="claude-dot" class="dot"></span></span>
+            <div class="cell-text">
+              <strong id="claude-title"></strong>
+              <p id="claude-text" class="secondary"></p>
+            </div>
+          </div>
+          <div id="claude-connector-row" class="cell row hidden">
             <input id="setup-connector" class="connector" type="text" readonly aria-label="connector">
-            <button id="setup-copy" data-t="bridge_copy"></button>
-            <button id="setup-done" class="ghost" data-t="claude_done"></button>
+            <button id="setup-copy" class="tinted" data-t="bridge_copy"></button>
+            <button id="setup-done" class="plain" data-t="claude_done"></button>
           </div>
-          <div id="claude-settings-row" class="row hidden"><button id="go-settings" data-t="claude_go_settings"></button></div>
+          <div id="claude-settings-row" class="cell row hidden"><button id="go-settings" class="tinted" data-t="claude_go_settings"></button></div>
         </div>
-        <div class="card start-card">
-          <h2 data-t="setup_title">Nuova chiamata</h2>
-          <p id="setup-notice" class="notice hidden"></p>
-          <div class="start-grid">
-            <label class="field">
-              <span data-t="language">Lingua della chiamata</span>
-              <select id="call-language">
-                <option value="auto" data-t="lang_auto">Auto</option>
-                <option value="it" data-t="lang_it">Italiano</option>
-                <option value="en" data-t="lang_en">English</option>
-              </select>
-            </label>
-            <fieldset class="field sources">
-              <legend data-t="sources">Cosa ascoltare</legend>
-              <label class="switch"><input type="checkbox" id="src-mic" checked><span class="track"></span><span data-t="src_mic"></span></label>
-              <label class="switch"><input type="checkbox" id="src-shared" checked><span class="track"></span><span data-t="src_shared"></span></label>
-            </fieldset>
-          </div>
-          <p class="hint" data-t="src_hint"></p>
-          <button id="start" class="primary big wide" data-t="btn_start">▶ Avvia</button>
-          <button id="demo" class="link" data-t="btn_demo">Demo</button>
+
+        <h2 class="group-title" data-t="sources">Cosa ascoltare</h2>
+        <div class="group">
+          <label class="cell">
+            <span class="cell-label" data-t="language">Lingua della chiamata</span>
+            <select id="call-language" class="cell-select">
+              <option value="auto" data-t="lang_auto">Auto</option>
+              <option value="it" data-t="lang_it">Italiano</option>
+              <option value="en" data-t="lang_en">English</option>
+            </select>
+          </label>
+          <label class="cell switch">
+            <span class="cell-label" data-t="src_mic"></span>
+            <input type="checkbox" id="src-mic" checked><span class="track" aria-hidden="true"></span>
+          </label>
+          <label class="cell switch">
+            <span class="cell-label" data-t="src_shared"></span>
+            <input type="checkbox" id="src-shared" checked><span class="track" aria-hidden="true"></span>
+          </label>
         </div>
-        <p class="hint center privacy" data-t="privacy"></p>
+        <p class="group-footer" data-t="src_hint"></p>
+
+        <button id="start" class="primary big wide"><svg class="icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 4.2v11.6c0 .8.9 1.3 1.6.9l9.3-5.8c.6-.4.6-1.4 0-1.8L7.6 3.3C6.9 2.9 6 3.4 6 4.2z"/></svg><span data-t="btn_start">Avvia</span></button>
+        <button id="demo" class="plain center-block" data-t="btn_demo">Demo</button>
+        <p class="group-footer center privacy" data-t="privacy"></p>
       </div>
 
       <div id="live" class="live hidden">
-        <div class="callbar">
-          <span id="status-dot" class="dot"></span>
-          <strong id="status">Pronto</strong>
-          <span id="timer" class="timer">00:00</span>
-          <select id="live-language" class="compact" aria-label="language">
-            <option value="auto" data-t="lang_auto">Auto</option>
-            <option value="it" data-t="lang_it">Italiano</option>
-            <option value="en" data-t="lang_en">English</option>
-          </select>
-          <span id="latency" class="meta" title=""></span>
-          <span id="bridge-state" class="bridge-state meta hidden"></span>
-          <span class="spacer"></span>
-          <button id="ask-claude" class="ask" data-t="btn_ask_claude"></button>
-          <button id="pip" class="ghost icon-btn" data-t="btn_pip">⧉</button>
-          <button id="stop" class="danger" data-t="btn_stop">■ Stop</button>
+        <!-- The call's Live Activity: state, time, who is talking, and the few things to do. -->
+        <div class="island" id="island">
+          <div class="island-main">
+            <span id="status-dot" class="dot"></span>
+            <strong id="status">Pronto</strong>
+            <span id="timer" class="timer">00:00</span>
+            <span class="meters" aria-hidden="true">
+              <span class="meter me" id="meter-me"><i></i><i></i><i></i><i></i><b data-t="speaker_me">Io</b></span>
+              <span class="meter them" id="meter-them"><i></i><i></i><i></i><i></i><b data-t="speaker_them">Altri</b></span>
+            </span>
+          </div>
+          <div class="island-tools">
+            <select id="live-language" class="compact" aria-label="language">
+              <option value="auto" data-t="lang_auto">Auto</option>
+              <option value="it" data-t="lang_it">Italiano</option>
+              <option value="en" data-t="lang_en">English</option>
+            </select>
+            <span id="latency" class="meta" title=""></span>
+            <span id="bridge-state" class="bridge-state meta hidden"></span>
+            <button id="ask-claude" class="ask" data-t="btn_ask_claude"></button>
+            <button id="pip" class="island-btn" data-t="btn_pip">In primo piano</button>
+            <button id="stop" class="danger" data-t="btn_stop">Stop</button>
+          </div>
         </div>
         <p id="audio-info" class="audio-info"></p>
         <p id="live-hint" class="live-hint"></p>
@@ -85,16 +107,21 @@
             <div id="meeting" class="meeting hidden"><strong id="meeting-title"></strong><span id="meeting-goal"></span></div>
             <!-- The latest suggestions: they stay in view while the script below scrolls. -->
             <div id="now" class="now" aria-live="polite">
-              <div class="now-head"><span class="now-label" data-t="sec_now">Adesso</span><span id="sug-topic" class="topic waiting"></span><span id="sug-time" class="sug-time"></span></div>
+              <div class="now-head">
+                <span class="now-label" data-t="sec_now">Adesso</span>
+                <span id="sug-topic" class="topic waiting"></span>
+                <span id="thinking" class="thinking-label hidden" data-t="claude_thinking">Claude sta pensando…</span>
+                <span id="sug-time" class="sug-time"></span>
+              </div>
               <div id="suggestions" class="suggestions"></div>
             </div>
             <details id="questions-box" class="fold hidden" open>
               <summary><span data-t="sec_questions"></span><span id="questions-count" class="count"></span></summary>
-              <ul id="questions" class="questions"></ul>
+              <ul id="questions" class="questions group"></ul>
             </details>
             <details id="sug-remember-box" class="fold hidden" open>
               <summary><span data-t="sec_remember"></span></summary>
-              <ul id="remember" class="remember"></ul>
+              <ul id="remember" class="remember group"></ul>
             </details>
             <!-- Every suggestion of this call, newest first: nothing disappears. -->
             <section id="script-box" class="script hidden">
@@ -111,20 +138,20 @@
             <div id="transcript" class="transcript" aria-live="off"></div>
           </section>
         </div>
-        <div class="toasts"><p id="notice" class="notice toast hidden"></p></div>
+        <div class="toasts"><p id="notice" class="notice toast hidden" role="status"></p></div>
       </div>
 
-      <div id="ended" class="card ended hidden">
-        <div class="ended-mark">✓</div>
-        <h2 data-t="ended_title"></h2>
-        <p id="ended-meta" class="muted small"></p>
-        <p id="ended-hint" class="hint"></p>
+      <div id="ended" class="ended hidden">
+        <div class="ended-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+        <h1 class="large-title center" data-t="ended_title"></h1>
+        <p id="ended-meta" class="secondary center"></p>
+        <p id="ended-hint" class="hint center"></p>
         <div class="row center">
           <button id="summary-claude" class="primary" data-t="btn_summary_claude"></button>
-          <button id="dl-transcript" data-t="download_transcript"></button>
-          <button id="new-call" class="ghost" data-t="btn_new_call"></button>
+          <button id="dl-transcript" class="tinted" data-t="download_transcript"></button>
+          <button id="new-call" class="plain" data-t="btn_new_call"></button>
         </div>
-        <p id="summary-claude-status" class="notice hidden"></p>
+        <p id="summary-claude-status" class="notice center hidden"></p>
         <details id="ended-script-box" class="fold ended-script hidden" open>
           <summary><span data-t="sec_script_ended"></span><span id="ended-script-count" class="count"></span></summary>
           <div id="ended-script" class="script-list"></div>
@@ -134,41 +161,42 @@
 
     <!-- HISTORY -->
     <section id="tab-history" class="tab">
-      <div class="card">
-        <h2 data-t="tab_history">Archivio</h2>
-        <div id="history" class="history"></div>
-      </div>
+      <h1 class="large-title" data-t="tab_history">Archivio</h1>
+      <div id="history" class="group history"></div>
     </section>
 
     <!-- SETTINGS -->
     <section id="tab-settings" class="tab">
-      <div class="card">
-        <h2 data-t="bridge_title"></h2>
+      <h1 class="large-title" data-t="tab_settings">Impostazioni</h1>
+
+      <h2 class="group-title" data-t="bridge_title"></h2>
+      <div class="group card">
         <p class="hint"><span data-t="bridge_text"></span> <a id="bridge-howto" href="https://github.com/aaddabbo30-bit/transcript#set-it-up-once" target="_blank" rel="noopener" data-t="bridge_howto"></a></p>
         <div id="bridge-manual">
           <label class="field"><span data-t="bridge_url"></span><input id="bridge-url" type="url" placeholder="https://….workers.dev"></label>
-          <div class="row"><button id="bridge-connect" class="primary" data-t="bridge_connect"></button><button id="bridge-off" class="ghost" data-t="bridge_off"></button></div>
+          <div class="row"><button id="bridge-connect" class="primary" data-t="bridge_connect"></button><button id="bridge-off" class="plain" data-t="bridge_off"></button></div>
         </div>
         <p id="bridge-here" class="hint hidden" data-t="bridge_here"></p>
         <div id="bridge-connector-box" class="hidden">
           <label class="field"><span data-t="bridge_connector"></span><input id="bridge-connector" class="connector" type="text" readonly></label>
           <p class="hint" data-t="bridge_connector_hint"></p>
-          <div class="row"><button id="bridge-copy" data-t="bridge_copy"></button><button id="bridge-clear" class="ghost" data-t="bridge_clear"></button><button id="bridge-new-key" class="ghost" data-t="bridge_new_key"></button></div>
+          <div class="row"><button id="bridge-copy" class="tinted" data-t="bridge_copy"></button><button id="bridge-clear" class="plain destructive" data-t="bridge_clear"></button><button id="bridge-new-key" class="plain" data-t="bridge_new_key"></button></div>
         </div>
-        <p id="bridge-status" class="muted small"></p>
+        <p id="bridge-status" class="secondary small"></p>
         <div id="project-box" class="sub hidden">
           <h3 data-t="project_title"></h3>
           <p class="hint" data-t="project_text"></p>
-          <div class="row"><button id="project-copy" data-t="project_copy"></button><span id="project-status" class="muted small"></span></div>
+          <div class="row"><button id="project-copy" class="tinted" data-t="project_copy"></button><span id="project-status" class="secondary small"></span></div>
         </div>
         <div class="sub">
           <label class="field"><span data-t="settings_claude_url"></span><input id="claude-url" type="url" placeholder="https://claude.ai/new"></label>
-          <p class="hint"><span data-t="settings_claude_url_hint"></span> <span id="claude-url-status" class="muted small"></span></p>
+          <p class="hint"><span data-t="settings_claude_url_hint"></span> <span id="claude-url-status" class="secondary small"></span></p>
         </div>
       </div>
-      <div class="card">
-        <h2 data-t="settings_transcription"></h2>
-        <label class="field"><span data-t="settings_whisper"></span>
+
+      <h2 class="group-title" data-t="settings_transcription"></h2>
+      <div class="group card">
+        <label class="field inline"><span data-t="settings_whisper"></span>
           <select id="whisper-model"><option value="base">base</option><option value="small">small</option></select>
         </label>
         <p class="hint" data-t="settings_whisper_hint"></p>
@@ -177,17 +205,18 @@
           <p class="hint" data-t="manual_text"></p>
           <ol id="manual-links"></ol>
           <div class="row">
-            <label class="button"><span data-t="manual_pick"></span><input id="manual-files" type="file" multiple accept=".onnx,.json,.wasm" hidden></label>
-            <span id="manual-status" class="muted small"></span>
+            <label class="button tinted"><span data-t="manual_pick"></span><input id="manual-files" type="file" multiple accept=".onnx,.json,.wasm" hidden></label>
+            <span id="manual-status" class="secondary small"></span>
           </div>
         </details>
       </div>
-      <div class="card">
-        <h2 data-t="settings_interface"></h2>
-        <label class="field"><span data-t="settings_ui"></span>
+
+      <h2 class="group-title" data-t="settings_interface"></h2>
+      <div class="group card">
+        <label class="field inline"><span data-t="settings_ui"></span>
           <select id="ui-language"><option value="it">Italiano</option><option value="en">English</option></select>
         </label>
-        <div class="row"><button id="settings-save" class="primary" data-t="settings_save"></button><span id="settings-status" class="muted small"></span></div>
+        <div class="row"><button id="settings-save" class="primary" data-t="settings_save"></button><span id="settings-status" class="secondary small"></span></div>
       </div>
     </section>
   </main>

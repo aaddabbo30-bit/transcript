@@ -8,7 +8,7 @@ A personal assistant for your calls and videos, in the spirit of Proactor.ai but
 - **Every call starts from scratch.** A new call has no briefing and no suggestions. You choose the chat that follows it: a new chat, or one that already knows the meeting. That chat saves a briefing for this call only (goal, participants, your positions, objectives, questions to ask, names and acronyms), and its questions are ticked on the page as they get answered. Nothing of it reaches the next call.
 
 <p align="center">
-  <img src="docs/web-live.png" alt="The page during a call: on the left the meeting, Claude's latest suggestion, the briefing's questions and the list of everything suggested so far, with filters and a pinned warning; on the right the transcript" width="760">
+  <img src="docs/web-live.png" alt="The page during a call: at the top a dark capsule with the call's state, time and who is talking; on the left the meeting, Claude's latest suggestion, the briefing's questions and the list of everything suggested so far; on the right the transcript as a conversation" width="760">
 </p>
 
 > The screenshots come from demo mode (a made-up call) rendered by the real app.
@@ -71,9 +71,14 @@ The connector address contains a secret key made by the page and kept in that br
    - either way, turn on **"Share audio"**;
    - for a call on your phone, put it on speaker and leave only *My microphone* ticked.
 
-   The page switches to the call view: one bar with the status, the timer and **Stop**, then **Claude's suggestions on the left** and **the transcript on the right**. New suggestions glow for a moment and say how fresh they are (*just now*, *12 s ago*); when you are in another window, the tab's title says *New suggestions*. Messages show at the bottom and go away by themselves. The page follows your system's light or dark theme.
+   The page switches to the call view:
+   - **At the top, the call's capsule** (like a Live Activity): its state, the time, and two small meters, **Io** and **Altri**, that move as you and the others speak. They show at a glance that both your microphone and the call's audio are coming in. Next to them: **Fai seguire a Claude**, **In primo piano** and **Stop**.
+   - **Claude's suggestions on the left**, **the transcript on the right** as a conversation (the others on the left, you on the right, in blue).
+   - New suggestions light up for a moment and say how fresh they are (*just now*, *12 s ago*). While Claude works on what was just said, the box says *Claude is thinking…*. When you are in another window, the tab's title says *New suggestions*.
+   - Messages come down from the top as banners and go away by themselves; flick one up (or tap it) to dismiss it.
+   - The design follows Apple's: the system font, the system colors, light and dark theme, and your settings for less motion, less transparency or more contrast.
 2. **Let Claude follow the call.** Press **Fai seguire a Claude ↗ / Let Claude follow ↗**. It copies the request and, the first time, opens claude.ai. Paste it (Ctrl+V) and send in the chat you choose (with the connector on: the tools menu under the message box): **a new chat** follows the call from what is said in it, **the chat where you prepared the meeting** also brings what it knows. Or just write **«segui la chiamata»** / «follow the call» there; written before you press **Start**, Claude waits for the call (up to about 5 minutes).
-   - Claude follows the call in rounds (tool `follow_call`). Each round waits for new lines, at once when the others ask you something, and tells Claude what is new, which briefing questions are still open and what it already suggested.
+   - Claude follows the call in rounds (tool `follow_call`). Each round waits for new lines, at once when the others ask you something, and tells Claude what is new, which briefing questions are still open and what it already suggested. Claude sends its suggestions with the next round itself: one tool call per round, so it reacts faster and goes further before claude.ai's limit on tool calls in one reply.
    - If the chat knows the meeting, Claude saves its briefing for this call: objectives, the questions you want to ask, your positions, the people, names and acronyms. It shows at the top of the page.
    - A chat follows only the call it was asked to follow. When you start a new call, that chat stops: let Claude follow the new one from the chat you want.
    - In the left column you get up to 3 things to say: **Answer** when they just asked you something, **Question** to move your objectives forward, **Point to raise**, **Watch out** (a risk, a commitment not to make). Big: the sentence ready to say, in the language of the call; small: why, in your language. Click one to copy it.
@@ -85,7 +90,7 @@ The connector address contains a secret key made by the page and kept in that br
    - The connector also has prompts (**«Segui la chiamata»**, **«Cosa dico adesso?»**, **«Cosa mi hanno chiesto?»**, **«Riassumi la chiamata»**, under the chat's **+** button), but claude.ai doesn't show a custom connector's prompts everywhere. The button and the written request always work.
    - **Tip:** in **Settings → Instructions for a Claude Project**, copy the instructions into a claude.ai Project (e.g. «Calls») and prepare each meeting in a chat of that Project: every chat then knows how to follow a call.
 3. **Or ask when you need it.** Write «cosa dico adesso?», «what did they just ask me?», «what did we decide about the budget?». Claude reads the call with the connector's tools; its suggestions also go to the left column.
-4. **Always on top.** **⧉ Always on top** moves the live panel into a small window that stays above the call. In a narrow window the suggestions sit above the transcript.
+4. **Always on top.** **In primo piano / On top** moves the live panel into a small window that stays above the call. In a narrow window the suggestions sit above the transcript.
 5. **Stop.** Press **Stop** at the end. The end-of-call view lists everything Claude suggested. Then ask Claude for a summary (**Summary with Claude ↗** copies the request). The call is also kept in the app's **History**, with Claude's suggestions, where you can download the transcript.
 
 ### Meeting briefing
@@ -395,6 +400,7 @@ The web app needs no build step: plain ES modules, served as static files. It ne
 - `js/whisper-core.js`: the decoding, done by hand on top of the pipeline: the language token restricted to Italian and English, the no-speech probability, the average log-probability, Whisper's token filters at the right steps, and a `<|startofprev|>` prompt with the glossary. If it can't run with the loaded library, the worker falls back to the plain pipeline.
 - `js/session.js`: the call, from Start to Stop, with Whisper's queue (one window at a time; a speaker's waiting sentences joined) and the transcript's lag.
 - `js/bridge.js`: finds the bridge at the page's own address (asking again when it doesn't answer), or at the one given in Settings, and sends it the running call; its polls keep the call in progress through silences, and the end of the call is sent again until the bridge has it.
+- `js/motion.js`: springs (Apple's response and damping ratio) and the banners' flick gesture: motion that starts from where things are, carries the pointer's speed, and can be caught mid-flight.
 - `js/script.js`: the call's script: every suggestion Claude sent, without repeats, grouped by arrival, with filters and pins; saved with the call in the history.
 - `js/prompts.js`: the requests that *Ask Claude* copies for a claude.ai chat.
 - `js/history.js`: past calls, in the browser's local storage.
@@ -407,10 +413,10 @@ Tests:
 - `node --test web/tests/unit.test.mjs` runs 26 unit tests: segmentation and echo detection on a real recording (echo alone, the user alone, both talking at once), the decoding steps, the filters, Whisper's queue, full simulated calls, the chat requests, the bridge client, its suggestions and Claude's follow state.
 - `node web/tests/whisper-real.mjs` runs the decoding with the real `whisper-base` (Transformers.js on Node, downloaded from Hugging Face): Italian and English told apart, the same words as the plain pipeline, silence and noise dropped, the glossary prompt not echoed. CI runs it in its own job.
 - `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording. It covers:
-  - the app served by its bridge: it connects by itself, shows the connector step, copies the request to follow the call, Claude's side follows the call over MCP and the page shows it, the suggestions Claude sends appear left of the transcript, the earlier ones stay in the script (filters, pins, copy, the list after the call), the briefing's questions are ticked when answered, and a new call starts without the last call's briefing or suggestions;
+  - the app served by its bridge: it connects by itself, shows the connector step, copies the request to follow the call, Claude's side follows the call over MCP and the page shows it (and that Claude is thinking), the suggestions Claude sends (with show_suggestions, or with the next follow_call round) appear left of the transcript, the earlier ones stay in the script (filters, pins, copy, the list after the call), the briefing's questions are ticked when answered, and a new call starts without the last call's briefing or suggestions;
   - a bridge that doesn't answer when the page opens: the call starts anyway, and Claude's column appears with the whole call as soon as the bridge answers;
   - a bridge at another address, connected in Settings;
-  - *Ask Claude* without a bridge, the end of a call, the history and the transcript download;
+  - *Ask Claude* without a bridge, the microphone's meter moving with the voice, the end of a call, the history and the transcript download;
   - the always-on-top window, the model loaded by hand, and the version stamp of every script, including the Whisper worker.
 
   It needs `playwright`.
@@ -421,9 +427,11 @@ A Cloudflare Worker with no dependencies, [`bridge/src/worker.js`](bridge/src/wo
 - **For the page:** `POST /api/<key>/call` saves the current call, `GET /api/<key>/status` checks the bridge, and `POST /api/<key>/delete` clears the calls.
 - **For Claude:** `POST /mcp/<key>` is an MCP server over Streamable HTTP, with JSON responses and no login.
   - `follow_call`: one round of following the call. The first picks the call in progress (or waits for the user to press Start, up to 12 rounds) and brings its briefing, if any, the last 3 minutes and the method; the next ones wait (up to 25 s; at once when the others ask a question, else after 3 lines or 8 s) and bring the new lines (by the order the page heard them, `n`), the questions to the user, the open briefing items, the suggestions already made, the languages to write in, and the cursor for the next round. The cursor (`<call tag>:<lines seen>`) names the call: the rounds stay on it, and stop when it ends or a new call starts. A page out of touch for more than 2 minutes is waited for up to 5. The page sees the rounds (`follow` in `GET /api/<key>/suggestions`).
-  - `show_suggestions`: up to 3 items, each `kind` (question, answer, point, warning), `say` (in the others' language) and `why` (in the user's); `remember`; `answered` ticks briefing items. The earlier ones are kept as `previous`.
+  - `show_suggestions`: up to 3 items, each `kind` (question, answer, point, warning), `say` (in the others' language) and `why` (in the user's); `remember`; `answered` ticks briefing items. The earlier ones are kept as `previous`. While following a call, Claude passes the same fields to `follow_call` instead: they are shown at once, then the round waits.
   - `set_meeting_context`: the call's briefing, with a `glossary`. Saved only while a call is in progress, for that call; with no call in progress it is refused. The page gets its title, goal, questions (done or not) and the glossary for Whisper (`meeting` in the same answers, for that call only).
   - `show_suggestions` and `set_meeting_context` take the call's tag (`call`): when it names a call that is over, nothing is written, so a chat that followed an old call can't reach the new one.
+  - A call whose page stopped sending without Stop is reported as *left open*, not as in progress.
+  - Polls and waiting rounds read only the calls' metadata, and a transcript only when it changed: the Worker stays well within its CPU time per request.
   - Read-only tools to answer questions about calls: `get_current_call`, `list_calls`, `get_call`.
   - Four prompts that carry the transcript: `segui_la_chiamata`, `cosa_dico_adesso`, `cosa_mi_hanno_chiesto` and `riassunto_chiamata`. claude.ai doesn't always show them; the tools' descriptions say how to follow a call when the user asks for it.
   - When the Worker also serves the app, its answers include the app's address, so Claude can give the user the link.
@@ -470,7 +478,6 @@ This project is released under the [MIT License](LICENSE). It builds on open-sou
 - [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) (MIT, a PyAudio fork with WASAPI loopback) and [PortAudio](http://www.portaudio.com/) (MIT-style)
 - [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [NumPy](https://numpy.org) (BSD-3-Clause)
 - Web app: [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0, loaded from jsDelivr) running the [onnx-community Whisper](https://huggingface.co/onnx-community/whisper-base) models (MIT)
-- Web app font: [Atkinson Hyperlegible](https://www.brailleinstitute.org/freefont/) by the Braille Institute (SIL Open Font License 1.1, files from [Fontsource](https://fontsource.org/fonts/atkinson-hyperlegible), served from `web/assets/fonts/` with its license)
 - The microphone + speaker loopback design was inspired by [ecoute](https://github.com/SevaSk/ecoute) (MIT).
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Call Assistant is an independent project, not affiliated with Anthropic or Proactor.ai.

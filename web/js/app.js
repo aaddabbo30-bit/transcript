@@ -8,6 +8,7 @@ import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcr
 import { translator } from "./i18n.js";
 import { ModelFileError, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, projectInstructions } from "./prompts.js";
+import { Banner } from "./motion.js";
 import { KINDS, SuggestionScript } from "./script.js";
 import { CallSession, TranscriptReplay } from "./session.js";
 import { ScriptedTranscriber, WhisperTranscriber } from "./transcriber.js";
@@ -84,15 +85,25 @@ function show(el, visible = true) {
 }
 
 let toastTimer = null;
+let banner = null;
 function setNotice(el, text, kind = "") {
   el.textContent = text || "";
-  el.className = `notice ${kind}${el.id === "notice" ? " toast" : ""}`;
-  show(el, Boolean(text));
-  // During the call, messages are a toast: information goes away by itself, warnings stay until clicked.
-  if (el.id === "notice") {
-    clearTimeout(toastTimer);
-    if (text && kind !== "warn" && kind !== "error") toastTimer = setTimeout(() => show(el, false), 6000);
+  if (el.id !== "notice") {
+    el.className = `notice ${kind}`;
+    show(el, Boolean(text));
+    return;
   }
+  // During the call, messages are a banner from the top: information goes away by itself,
+  // warnings stay until flicked away or tapped.
+  banner = banner || new Banner(el, { onClose: () => clearTimeout(toastTimer) });
+  el.className = `notice toast ${kind}${banner.open || text ? "" : " hidden"}`;
+  clearTimeout(toastTimer);
+  if (!text) {
+    banner.hide();
+    return;
+  }
+  banner.show();
+  if (kind !== "warn" && kind !== "error") toastTimer = setTimeout(() => banner.hide(), 6000);
 }
 
 function message(payload) {
@@ -117,10 +128,23 @@ async function copyText(text, view = window) {
 }
 
 function showTab(name) {
-  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tabs button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === name);
+    b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  });
+  placeThumb();
   document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${name}`));
   if (name === "history") renderHistory();
   if (name === "settings") renderSettings();
+}
+
+/** The segmented control's selection slides under the active tab (from where it is, if it was still moving). */
+function placeThumb() {
+  const active = document.querySelector(".tabs button.active");
+  const thumb = document.querySelector(".seg-thumb");
+  if (!active || !thumb || !active.offsetWidth) return; // the bar is hidden during a call: keep where it was
+  thumb.style.width = `${active.offsetWidth}px`;
+  thumb.style.transform = `translateX(${active.offsetLeft}px)`;
 }
 
 // ------------------------------------------------------------- Claude box
@@ -244,6 +268,7 @@ async function startCall({ demo = false } = {}) {
   bridgeSync = null;
   try {
     await session.start();
+    startMeters();
     attachBridge();
     // Not connected yet (the network, for a moment): keep trying; Claude joins as soon as the bridge answers.
     if (!bridgeActive()) connectHere();
@@ -329,18 +354,52 @@ function handleEvent(kind, payload) {
 function addTranscriptLine(line) {
   const box = $("transcript");
   const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  // A conversation: the others on the left, the user on the right; a speaker's lines in a row sit together.
+  const prev = box.lastElementChild;
+  const cont = Boolean(prev && prev.dataset.speaker === line.speaker && line.t - Number(prev.dataset.t) < 30);
   const div = document.createElement("div");
-  div.className = "line";
+  div.className = `line ${line.speaker}${cont ? " cont" : ""} new`;
+  div.dataset.speaker = line.speaker;
+  div.dataset.t = String(line.t);
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = fmtTime(line.t);
   const who = document.createElement("span");
-  who.className = line.speaker;
+  who.className = "who";
   who.textContent = `${line.speaker === "me" ? t("speaker_me") : t("speaker_them")}: `;
-  div.append(time, who, document.createTextNode(line.text));
+  const bubble = document.createElement("span");
+  bubble.className = "bubble";
+  bubble.textContent = line.text;
+  div.append(time, who, bubble);
   box.append(div);
+  // Arrives once; moving the panel to the always-on-top window must not replay it.
+  setTimeout(() => div.classList.remove("new"), 500);
   while (box.childElementCount > 300) box.firstElementChild.remove();
   if (atEnd) box.scrollTop = box.scrollHeight;
+  if (session && !session.capture) pulse[line.speaker] = performance.now(); // the demo has no audio: the meters follow its lines
+}
+
+/** Who is talking: the meters in the call's capsule follow the microphone and the call's audio. */
+const pulse = { me: 0, them: 0 };
+let meterTimer = null;
+function startMeters() {
+  clearInterval(meterTimer);
+  meterTimer = setInterval(() => {
+    if (!session || session.done) {
+      clearInterval(meterTimer);
+      return;
+    }
+    const levels = session.levels();
+    for (const who of ["me", "them"]) {
+      const since = (performance.now() - pulse[who]) / 1000;
+      const demo = since < 1.6 ? (1 - since / 1.6) * (0.55 + 0.45 * Math.random()) : 0;
+      const level = Math.max(levels[who], demo);
+      const el = $(`meter-${who}`);
+      if (!el) continue;
+      el.style.setProperty("--l", level.toFixed(2));
+      el.classList.toggle("quiet", level < 0.05);
+    }
+  }, 90);
 }
 
 /** How long after the end of a sentence its text appears: the average of the last few. */
@@ -368,10 +427,24 @@ function renderLatency() {
 
 /** Whether Claude is following the call (follow_call reads), refreshed every second by tick(). */
 let following = null;
+let seenCursor = 0; // the lines Claude had read when its last suggestions arrived
 function showFollow(f) {
   following = f;
   renderFollow();
   renderWaiting();
+}
+
+/**
+ * Claude at work: a round just brought it lines it hadn't answered yet, and
+ * no suggestions came since. Shown for a short while: when the lines were small
+ * talk, Claude has nothing to show and the next round starts.
+ */
+function renderThinking() {
+  const f = following;
+  const on = Boolean(f && f.cursor > seenCursor && Date.now() - f.readAt < 20000 && (!shownSuggestions || f.readAt > shownSuggestions.updatedAt));
+  show($("thinking"), on);
+  show($("sug-time"), !on);
+  $("now").classList.toggle("thinking", on);
 }
 
 function renderFollow() {
@@ -386,6 +459,7 @@ function renderFollow() {
   el.className = `follow-state ${state === "on" ? "on" : "off"}`;
   el.textContent = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t("follow_off");
   $("ask-claude").classList.toggle("attention", state !== "on");
+  renderThinking();
 }
 
 /** The call's briefing (Claude saves it with set_meeting_context): title, goal, and its questions, ticked when answered. */
@@ -415,6 +489,9 @@ function showSuggestions(s) {
   const fresh = Boolean(s && (!shownSuggestions || shownSuggestions.updatedAt !== s.updatedAt));
   shownSuggestions = s;
   if (s && fresh) script.add(s);
+  if (fresh) seenCursor = following ? following.cursor : seenCursor;
+  if (!s) seenCursor = 0;
+  if ($("thinking")) renderThinking();
   renderWaiting();
   renderSugTime();
   const list = $("suggestions");
@@ -432,6 +509,16 @@ function showSuggestions(s) {
   if (fresh) markFresh(true);
 }
 
+// Symbols for the kinds of suggestion, drawn like SF Symbols (stroke, round caps).
+const svg = (d) => `<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const KIND_ICONS = {
+  answer: svg('<path d="M8 5L3.5 9.5 8 14"/><path d="M3.5 9.5H12a4.5 4.5 0 014.5 4.5v1"/>'),
+  question: svg('<circle cx="10" cy="10" r="7.5"/><path d="M7.8 7.8a2.3 2.3 0 114.1 1.4c-.8.8-1.9 1.2-1.9 2.4"/><path d="M10 14.2v.1"/>'),
+  point: svg('<path d="M7.5 15.5h5"/><path d="M8 13c0-1.7-2.5-2.8-2.5-5.5a4.5 4.5 0 019 0C14.5 10.2 12 11.3 12 13z"/>'),
+  warning: svg('<path d="M10 3.2l7.3 12.6H2.7z"/><path d="M10 8.3v3.2"/><path d="M10 13.9v.1"/>'),
+};
+KIND_ICONS.comment = KIND_ICONS.point;
+
 function suggestionCard(item) {
   const say = item.say || item.text;
   const card = document.createElement("div");
@@ -439,7 +526,8 @@ function suggestionCard(item) {
   card.title = t("click_to_copy");
   const kind = document.createElement("div");
   kind.className = `kind ${item.kind}`;
-  kind.textContent = t(`kind_${item.kind}`);
+  kind.innerHTML = KIND_ICONS[item.kind] || KIND_ICONS.point;
+  kind.append(t(`kind_${item.kind}`));
   const text = document.createElement("div");
   text.className = "text";
   text.textContent = say;
@@ -524,7 +612,10 @@ function renderScript() {
     if (kind !== "all" && !counts[kind]) continue;
     const b = document.createElement("button");
     b.className = `filter${scriptFilter === kind ? " on" : ""}`;
-    b.textContent = `${t(`filter_${kind}`)} ${counts[kind]}`;
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = String(counts[kind]);
+    b.append(`${t(`filter_${kind}`)} `, n);
     b.setAttribute("aria-pressed", String(scriptFilter === kind));
     b.addEventListener("click", () => {
       scriptFilter = kind;
@@ -812,6 +903,7 @@ function renderHistory() {
   const box = $("history");
   box.innerHTML = "";
   const calls = loadCalls();
+  box.classList.toggle("empty", !calls.length);
   if (!calls.length) {
     box.textContent = t("history_empty");
     return;
@@ -828,7 +920,7 @@ function renderHistory() {
     if (first) {
       const preview = document.createElement("span");
       preview.className = "muted";
-      preview.textContent = ` · ${first.text.slice(0, 80)}`;
+      preview.textContent = first.text.slice(0, 80);
       title.append(preview);
     }
     title.addEventListener("click", () => {
@@ -836,11 +928,12 @@ function renderHistory() {
       showTab("call");
     });
     const md = document.createElement("button");
+    md.className = "tinted";
     md.textContent = ".md";
     md.title = t("download_transcript");
     md.addEventListener("click", () => download(fileName(call, "transcript"), transcriptMarkdown(call, t)));
     const del = document.createElement("button");
-    del.className = "ghost";
+    del.className = "plain destructive";
     del.textContent = t("history_delete");
     del.addEventListener("click", () => {
       deleteCall(call.id);
@@ -893,7 +986,6 @@ function wire() {
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
   // Back on the page: the "new suggestions" mark in the tab's title has done its job.
   document.addEventListener("visibilitychange", () => !document.hidden && setBadge(false));
-  $("notice").addEventListener("click", () => show($("notice"), false));
   $("start").addEventListener("click", () => startCall());
   $("demo").addEventListener("click", () => startCall({ demo: true }));
   $("stop").addEventListener("click", stopCall);
@@ -1016,6 +1108,7 @@ function wire() {
       t = translator(settings.uiLanguage);
       applyTranslations();
       renderSetup();
+      placeThumb();
     }
     $("settings-status").textContent = t("settings_saved");
   });
@@ -1033,4 +1126,11 @@ wire();
 renderSetup();
 renderClaudeBox(!bridgeActive());
 connectHere();
+
+// The segmented control's selection, placed at once, then sliding (also when the bar comes back after a call).
+placeThumb();
+requestAnimationFrame(() => document.querySelector(".segmented").classList.add("ready"));
+if ("ResizeObserver" in window) new ResizeObserver(placeThumb).observe(document.querySelector(".tabs"));
+// The bar's soft edge shows only once content scrolls under it.
+addEventListener("scroll", () => document.body.classList.toggle("scrolled", scrollY > 4), { passive: true });
 window.__callAssistant = { get session() { return session; } };

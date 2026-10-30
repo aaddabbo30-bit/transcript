@@ -158,6 +158,9 @@ await step("live microphone -> scripted Whisper -> transcript -> «Ask Claude» 
   assert.match(first, /Io: frase di prova 1/);
   assert.match(await page.textContent("#audio-info"), /mic/i);
   assert.match(await page.textContent("#status"), /ascolto/i);
+  // The capsule's meters move with the microphone; the call's side, not shared here, stays still.
+  await page.waitForFunction(() => Number(document.getElementById("meter-me").style.getPropertyValue("--l")) > 0.2, null, { timeout: 15000 });
+  assert.equal(Number(await page.evaluate(() => document.getElementById("meter-them").style.getPropertyValue("--l"))), 0);
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-mic.png") });
 
   // First request: copied, and Claude opens in a new tab.
@@ -204,9 +207,10 @@ await step("always-on-top window: the live panel keeps updating there, and Stop 
 // reaches it at https://bridge.test (bridge alone, like the Deploy button) or
 // at https://app.test (deployed with the app, like the repository imported as
 // it is); Claude's side is a direct MCP request.
-const bridgeEnv = { DB: memoryD1() };
+const bridgeEnv = { DB: memoryD1(), FOLLOW_WAIT_S: "1" };
 const appEnv = {
   DB: bridgeEnv.DB,
+  FOLLOW_WAIT_S: "1",
   ASSETS: {
     async fetch(request) {
       const file = await webFile(new URL(request.url).pathname);
@@ -291,7 +295,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   // One click: the request to follow the call, ready to paste in Claude's chat.
   assert.equal((await page.textContent("#ask-claude")).trim(), "Fai seguire a Claude ↗");
   await Promise.all([page.waitForEvent("popup"), page.click("#ask-claude")]);
-  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant[\s\S]*follow_call[\s\S]*set_meeting_context[\s\S]*show_suggestions/);
+  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant[\s\S]*follow_call[\s\S]*set_meeting_context[\s\S]*richiama subito follow_call[\s\S]*suggestions/);
   assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat di Claude/);
   // A new call starts without a briefing. Claude follows it: its first round has the call so far; the page shows it is following.
   assert.ok(await page.isHidden("#meeting"));
@@ -301,6 +305,11 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.ok(tag, round);
   assert.match(round, /This call has no briefing yet: every call starts without one\.[\s\S]*How to follow, every round:/);
   await page.waitForFunction(() => /^Claude segue la call: giro 1, \d+ s fa$/.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
+  // Claude has lines it hasn't answered yet: the page says it is thinking, until its suggestions arrive.
+  await page.waitForSelector("#thinking:not(.hidden)", { timeout: 15000 });
+  assert.equal(await page.textContent("#thinking"), "Claude sta pensando…");
+  assert.ok(await page.evaluate(() => document.getElementById("now").classList.contains("thinking")));
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-thinking.png"), clip: { x: 0, y: 0, width: 1200, height: 560 } });
   // The chat knows the meeting: Claude saves its briefing for this call. Its title and questions show above the suggestions.
   const briefing = await mcp(connector, "tools/call", {
     name: "set_meeting_context",
@@ -333,6 +342,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   }, appEnv);
   assert.match(shown.content[0].text, new RegExp(`^Shown in the Call Assistant window, next to the transcript\\. Next: call follow_call with cursor="${tag}:\\d+"\\.$`));
   await page.waitForFunction(() => document.querySelectorAll("#suggestions .suggestion").length === 2, null, { timeout: 15000 });
+  assert.ok(await page.isHidden("#thinking"), "the suggestions arrived: no longer thinking");
   assert.equal(await page.textContent("#sug-topic"), "Giulia ha un'offerta di lavoro a Milano");
   assert.equal(await page.textContent("#suggestions .suggestion >> nth=0"), "DomandaQuando dovresti iniziare?serve la data per decidere");
   assert.match(await page.textContent("#suggestions .suggestion >> nth=1"), /^Attenzione/);
@@ -357,7 +367,9 @@ await step("app served by its bridge: connected by itself, last step in the Call
   await page.click("#suggestions .suggestion >> nth=0");
   assert.equal(await clipboard(page), "Quando dovresti iniziare?");
   // The next set takes "now"; the earlier ones stay in the script below: nothing disappears.
-  await mcp(connector, "tools/call", { name: "show_suggestions", arguments: { topic: "La data", suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] } }, appEnv);
+  // The next round carries them: follow_call with what to show for the lines just read.
+  const [, cursor] = /cursor="([0-9a-z]+:\d+)"/.exec(round) || [];
+  assert.match(await readBridge(connector, "follow_call", { cursor, topic: "La data", suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] }, appEnv), /^Shown in the page: 1 suggestion\./);
   await page.waitForFunction(() => document.querySelectorAll("#script .item").length === 2, null, { timeout: 15000 });
   assert.equal(await page.textContent("#suggestions .suggestion .text"), "Posso iniziare a gennaio.");
   assert.deepEqual(await page.$$eval("#script .item .say", (els) => els.map((e) => e.textContent)), ["Quando dovresti iniziare?", "Non promettere una risposta entro oggi."]);
@@ -381,7 +393,10 @@ await step("app served by its bridge: connected by itself, last step in the Call
   // After the call, and in the history: everything Claude suggested.
   assert.equal(await page.textContent("#ended-script-count"), "3");
   assert.equal(await page.locator("#ended-script .item").count(), 3);
-  if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-ended-script.png"), fullPage: true });
+  if (SHOTS) {
+    await page.waitForTimeout(800); // the check mark has settled
+    await page.screenshot({ path: join(SHOTS, "web-ended-script.png"), fullPage: true });
+  }
   await untilBridge(connector, /Status: ended\. To follow a new call, the user opens the Call Assistant at https:\/\/app\.test\/ and presses Start\./, appEnv);
   // A new call starts clean: no briefing, no suggestions of the last one.
   await page.click("#new-call");

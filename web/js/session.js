@@ -58,6 +58,18 @@ export class CallSession {
     return this.t0 === null ? 0 : this.clock() - this.t0;
   }
 
+  /** How loud each side is right now, 0 to 1 (-55 dB to -15 dB): the page's meters. Silent when a source stopped sending. */
+  levels() {
+    const r = this.router;
+    const now = this.elapsed();
+    const level = (source) => {
+      if (!r || r.lastFeed[source] === undefined || now - r.lastFeed[source] > 0.5) return 0;
+      const db = 20 * Math.log10((r.levels[source] || 0) + 1e-9);
+      return Math.max(0, Math.min(1, (db + 55) / 40));
+    };
+    return { me: level(ME), them: level(THEM) };
+  }
+
   setLanguage(lang) {
     this.language = lang;
   }
