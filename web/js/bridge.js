@@ -115,7 +115,7 @@ export class Bridge {
  * Claude asks to show for it (onSuggestions, each time it changes).
  */
 export class BridgeSync {
-  constructor({ bridge, session, intervalMs = 2500, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {}, onFollow = () => {} }) {
+  constructor({ bridge, session, intervalMs = 2000, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {}, onFollow = () => {} }) {
     this.bridge = bridge;
     this.session = session;
     this.intervalMs = intervalMs;
