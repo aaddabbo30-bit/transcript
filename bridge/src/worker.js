@@ -817,9 +817,12 @@ async function followRound(args, ctx) {
     }
     const rounds = cur.given && prev && !prev.callId ? prev.rounds + 1 : 1;
     await saveFollow(db, room, { callId: null, rounds, readAt: now, cursor: 0 });
+    // The page says it is listening, but no call reaches this connector: the page sends to another address.
+    const elsewhere =
+      ` If the user says the page is already listening, it is sending to another address than this connector${app ? `: they should open the Call Assistant at ${app}, the page that goes with this connector, and start the call there` : ": the connector address on claude.ai must be the one in the page's Settings"}.`;
     return rounds >= FOLLOW_NO_CALL_ROUNDS
-      ? `Round ${rounds} · still no call: the user hasn't pressed Start${start}. Stop following now and tell the user in one line to start the call and then ask you again.`
-      : `Round ${rounds} · no call in progress yet: waiting for the user to press Start${start}. Call follow_call again with cursor="0" (it waits up to 25 s).`;
+      ? `Round ${rounds} · still no call: the user hasn't pressed Start${start}. Stop following now and tell the user in one line to start the call and then ask you again.${elsewhere}`
+      : `Round ${rounds} · no call in progress yet: waiting for the user to press Start${start}. Call follow_call again with cursor="0" (it waits up to 25 s).${rounds >= 3 ? elsewhere : ""}`;
   }
   const length = fmtTime(lengthOf(call));
   if (call.status === "ended") {
@@ -931,7 +934,8 @@ function describeList(calls, now, app) {
 
 function noCalls(app) {
   return app
-    ? `No calls yet. The user opens the Call Assistant at ${app} and presses Start: the transcript appears here within a few seconds. Give them this link.`
+    ? `No calls yet. The user opens the Call Assistant at ${app} and presses Start: the transcript appears here within a few seconds. Give them this link. ` +
+        "(A copy of the page at another address sends its calls elsewhere: this connector only sees the page at that link.)"
     : "No calls yet. In the Call Assistant page, connect the bridge under Settings and start a call: " +
         "its transcript appears here within a few seconds.";
 }
@@ -1129,7 +1133,10 @@ async function api(request, env, key, action) {
   const now = Date.now();
   if (action === "status" && request.method === "GET") {
     const calls = await loadCallMetas(db, room, now);
-    return json({ ok: true, calls: calls.length });
+    // app: where this bridge serves the page, if it does. A copy of the page elsewhere goes there: the
+    // connector on claude.ai goes with the page on its bridge (same key), so Claude sees the calls.
+    const app = appLink(request, env);
+    return json({ ok: true, calls: calls.length, ...(app ? { app } : {}) });
   }
   if (action === "suggestions" && request.method === "GET") {
     // ?call=<id>: what belongs to the page's own call (older pages leave it out: the current call).

@@ -262,6 +262,8 @@ body.in-call main { padding-top: .75rem; }
 /* Claude's column */
 .follow-state { display: flex; align-items: center; gap: .5rem; margin: 0 0 .75rem; font-size: .875rem; color: var(--label-2); }
 .follow-state:empty { display: none; }
+.follow-state { flex-wrap: wrap; }
+.follow-state button { padding: 0; font-size: inherit; }
 .follow-state::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: var(--label-3); flex: none; }
 .follow-state.on::before { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); }
 .follow-state.off { color: var(--orange); }
