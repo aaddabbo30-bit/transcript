@@ -20,6 +20,8 @@ const params = new URLSearchParams(location.search);
 // Test hooks: ?engine=scripted (no Whisper download), ?speed=N (demo speed), ?unseen=ms (see renderFollow).
 const TEST_ENGINE = params.get("engine");
 const UNSEEN_MS = Number(params.get("unseen")) || 60000;
+// ?slow=s (see renderFollow): Claude counts as slow when its rounds take this long.
+const SLOW_S = Number(params.get("slow")) || 30;
 
 const SETTINGS_KEY = "ca.settings.v1";
 const DEFAULTS = {
@@ -216,6 +218,7 @@ function resetLive() {
   $("ask-claude").classList.remove("attention");
   shownSuggestions = null;
   followAskedAt = 0;
+  claudeTimes = [];
   $("follow-state").dataset.text = "";
   script = new SuggestionScript();
   scriptFilter = "all";
@@ -442,7 +445,10 @@ function renderLatency() {
 let following = null;
 let seenCursor = 0; // the lines Claude had read when its last suggestions arrived
 let followAskedAt = 0; // when the user copied the request to follow this call
+let claudeTimes = []; // how long Claude took over its last rounds, in seconds
 function showFollow(f) {
+  // How long Claude took over each round (measured by the bridge: from the lines it got to its next call).
+  if (f && f.took > 0 && (!following || f.rounds !== following.rounds)) claudeTimes = [...claudeTimes, f.took].slice(-3);
   following = f;
   renderFollow();
   renderWaiting();
@@ -473,20 +479,35 @@ function renderFollow() {
   const state = ago === null ? "off" : ago <= 120 ? "on" : "lost";
   // Asked to follow a minute ago, and no round reached this call: Claude's connector reads another address.
   const unseen = state === "off" && followAskedAt && Date.now() - followAskedAt > UNSEEN_MS;
-  const text = state === "on" ? t("follow_on", { n: following.rounds, s: ago }) : state === "lost" ? t("follow_lost", { s: ago }) : t(unseen ? "follow_unseen" : "follow_off");
-  el.className = `follow-state ${state === "on" ? "on" : "off"}`;
+  // How long Claude takes per round. Slow, it falls behind the call (a long chat, extended thinking): a new chat starts fast.
+  const speed = claudeTimes.length ? Math.round(claudeTimes.reduce((a, b) => a + b, 0) / claudeTimes.length) : null;
+  const slow = state === "on" && claudeTimes.length >= 2 && speed >= SLOW_S;
+  let text;
+  if (state === "on") {
+    text = slow
+      ? t("follow_slow", { r: speed })
+      : speed !== null
+        ? t("follow_on_speed", { n: following.rounds, s: ago, r: speed })
+        : t("follow_on", { n: following.rounds, s: ago });
+  } else text = state === "lost" ? t("follow_lost", { s: ago }) : t(unseen ? "follow_unseen" : "follow_off");
+  el.className = `follow-state ${state === "on" && !slow ? "on" : "off"}`;
   if (el.dataset.text !== text) {
     el.dataset.text = text;
     el.textContent = text;
-    if (unseen) {
-      // The address stays off screen (the screen may be shared): one tap copies it.
-      const copy = document.createElement("button");
-      copy.className = "plain";
-      copy.textContent = t("copy_connector");
-      copy.addEventListener("click", async (e) => {
-        if (await copyText(makeBridge().connectorUrl, e.view || window)) setNotice($("notice"), t("connector_copied"), "ok");
-      });
-      el.append(" ", copy);
+    if (unseen || slow) {
+      const button = document.createElement("button");
+      button.className = "plain";
+      if (unseen) {
+        // The address stays off screen (the screen may be shared): one tap copies it.
+        button.textContent = t("copy_connector");
+        button.addEventListener("click", async (e) => {
+          if (await copyText(makeBridge().connectorUrl, e.view || window)) setNotice($("notice"), t("connector_copied"), "ok");
+        });
+      } else {
+        button.textContent = t("btn_new_chat");
+        button.addEventListener("click", followInNewChat);
+      }
+      el.append(" ", button);
     }
   }
   $("ask-claude").classList.toggle("attention", state !== "on");
@@ -840,6 +861,27 @@ async function askClaude(e) {
   const text = follow ? chatConnectorPrompt(settings.uiLanguage, "follow") : chatAskPrompt({ lang: settings.uiLanguage, lines: session.store.lines });
   if (await sendToClaude(text, view, !claudeOpened)) setNotice($("notice"), t(follow ? "follow_copied" : "ask_copied"), "ok");
   else setNotice($("notice"), t("ask_copy_failed"), "error");
+}
+
+/**
+ * Claude fell behind (its chat grew long over the call): the same request in a
+ * new chat. It picks the call up from here, with the call's briefing, and the
+ * old chat's next round tells it to stop.
+ */
+async function followInNewChat(e) {
+  const view = e.view || window;
+  if (!(await copyText(chatConnectorPrompt(settings.uiLanguage, "follow"), view))) {
+    setNotice($("notice"), t("ask_copy_failed"), "error");
+    return;
+  }
+  try {
+    view.open(CLAUDE_NEW_CHAT, "_blank");
+  } catch {
+    /* blocked: the user opens Claude */
+  }
+  claudeTimes = [];
+  followAskedAt = Date.now();
+  setNotice($("notice"), t("new_chat_copied"), "ok");
 }
 
 async function summaryWithClaude(e) {

@@ -38,7 +38,8 @@ Scrivi:
       "prima la risposta; poi domande che fanno avanzare i miei obiettivi, punti da sollevare, avvisi: rischi, impegni da non prendere). " +
       "«say» nella lingua che parlano gli altri, pronto da leggere ad alta voce; «why» in italiano, al massimo 10 parole. " +
       "Non ripetere proposte già fatte; segna in answered le domande del briefing che si sono chiarite. Compaiono subito nella pagina; poi il giro aspetta le righe nuove.\n" +
-      "4. Il cursor ti tiene su questa call: usa sempre quello dell'ultimo giro, e così via.\n" +
+      "4. Il cursor ti tiene su questa call: usa sempre quello dell'ultimo giro. Sii veloce: pochi secondi a giro e proposte brevi, " +
+      "una proposta in ritardo non serve; se sei rimasto indietro, pensa a quello che si dice adesso.\n" +
       "Non scrivere nella chat durante la call: guardo la finestra dell'Assistente. Quando la call finisce scrivimi una riga e proponimi " +
       "riassunto, decisioni e prossimi passi. Se in questa chat non hai gli strumenti di Call Assistant, dimmelo in una riga: va attivato il connector.",
     project: `Sei il mio suggeritore durante le call di lavoro. La mia pagina Assistente chiamate trascrive la call dal vivo; il connector Call Assistant te la fa leggere.
@@ -87,7 +88,8 @@ Write:
       "the answer first; then questions that move my objectives forward, points to raise, warnings: risks, commitments not to make). " +
       "\"say\" in the language the others speak, ready to read out loud; \"why\" in English, at most 10 words. " +
       "Don't repeat earlier suggestions; put in answered the briefing questions that got settled. They show in the page at once; then the round waits for new lines.\n" +
-      "4. The cursor keeps you on this call: always use the one from the last round, and so on.\n" +
+      "4. The cursor keeps you on this call: always use the one from the last round. Be quick: a few seconds per round and short " +
+      "suggestions, a late suggestion is no use; if you fell behind, think about what is being said now.\n" +
       "Don't write in the chat during the call: I watch the Call Assistant window. When the call ends, write me one line and offer " +
       "a summary, decisions and next steps. If this chat doesn't have the Call Assistant tools, tell me in one line: the connector needs turning on.",
     project: `You are my prompter during work calls. My Call Assistant page transcribes the call live; the Call Assistant connector lets you read it.

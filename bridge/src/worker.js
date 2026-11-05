@@ -36,8 +36,11 @@ const CORS = {
 };
 
 const LANG_NAMES = { it: "Italian", en: "English" };
-const FOLLOW_TRIGGER_LINES = 3; // follow_call answers once this many new lines arrived
-const FOLLOW_SETTLE_S = 8; // or this long after the first new line
+const FOLLOW_TRIGGER_LINES = 4; // follow_call answers once this many new lines arrived (at once for a question to the user)
+const FOLLOW_SETTLE_S = 10; // or this long after the first new line
+const RECENT_S = 60; // a round that fell behind brings only the last minute…
+const RECENT_LINES = 12; // …and at most this many lines
+const SLOW_ROUND_S = 20; // Claude took longer than this over a round: it is told to be quicker
 const FOLLOW_NO_CALL_ROUNDS = 12; // rounds (25 s each) waiting for the user to press Start before telling Claude to stop
 
 const TRANSCRIPT_NOTE =
@@ -93,7 +96,7 @@ const TOOLS = [
       properties: {
         cursor: {
           type: "string",
-          description: 'The cursor the previous round gave you, exactly as it is (like "mhc2kq1:57"). Leave it out the first time.',
+          description: 'The cursor the previous round gave you, exactly as it is (like "mhc2kq1.a7f2:57"). Leave it out the first time.',
         },
         ...SHOW_PROPS,
       },
@@ -115,7 +118,7 @@ const TOOLS = [
       properties: {
         call: {
           type: "string",
-          description: 'The call this is for: the tag follow_call gives (the part of the cursor before the colon). Leave it out when not following a call.',
+          description: 'The call this is for: the tag follow_call gives (the start of the cursor, before the dot). Leave it out when not following a call.',
         },
         ...SHOW_PROPS,
       },
@@ -138,7 +141,7 @@ const TOOLS = [
       properties: {
         call: {
           type: "string",
-          description: 'The call this is for: the tag follow_call gives (the part of the cursor before the colon). Leave it out when not following a call.',
+          description: 'The call this is for: the tag follow_call gives (the start of the cursor, before the dot). Leave it out when not following a call.',
         },
         title: { type: "string" },
         goal: { type: "string", description: "What has to happen by the end of the meeting." },
@@ -222,7 +225,8 @@ const FOLLOW_REQUEST =
   "prima la risposta; poi domande che fanno avanzare i miei obiettivi, punti da sollevare, avvisi: rischi, impegni da non prendere). " +
   "«say» nella lingua che parlano gli altri, pronto da leggere ad alta voce; «why» in italiano, al massimo 10 parole. " +
   "Non ripetere proposte già fatte; segna in answered le domande del briefing che si sono chiarite. Compaiono subito nella pagina; poi il giro aspetta le righe nuove.\n" +
-  "4. Il cursor ti tiene su questa call: usa sempre quello dell'ultimo giro, e così via.\n" +
+  "4. Il cursor ti tiene su questa call: usa sempre quello dell'ultimo giro. Sii veloce: pochi secondi a giro e proposte brevi, " +
+  "una proposta in ritardo non serve; se sei rimasto indietro, pensa a quello che si dice adesso.\n" +
   "Non scrivere nella chat durante la call: guardo la finestra dell'Assistente. Quando la call finisce scrivimi una riga e proponimi " +
   "riassunto, decisioni e prossimi passi. Se in questa chat non hai gli strumenti di Call Assistant, dimmelo in una riga: va attivato il connector.";
 
@@ -317,6 +321,16 @@ function ready(db) {
           rounds INTEGER NOT NULL,
           read_at INTEGER NOT NULL,
           cursor INTEGER NOT NULL
+        )`,
+      ),
+      // Which following of the call is the current one (follow_call's cursor carries its id), and how long
+      // Claude took over its last round (from the lines to its next call), one row per key.
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS followers (
+          room TEXT PRIMARY KEY,
+          call_id TEXT NOT NULL,
+          gen TEXT NOT NULL,
+          took INTEGER NOT NULL DEFAULT 0
         )`,
       ),
       // What Claude last asked to show in the page (show_suggestions), one row per key.
@@ -565,21 +579,21 @@ export function callTag(id) {
 
 /** A call tag as Claude passes it (alone, or the whole cursor); null when there is none. */
 function tagArg(value) {
-  const m = /^\s*([a-z0-9]{1,16})(?::\d+)?\s*$/i.exec(String(value ?? ""));
+  const m = /^\s*([a-z0-9]{1,16})(?:\.[a-z0-9]{1,8})?(?::\d+)?\s*$/i.exec(String(value ?? ""));
   return m ? m[1].toLowerCase() : null;
 }
 
 /**
- * follow_call's cursor: "<call tag>:<lines seen>". A bare number comes from
- * rounds of an older version (the call those rounds were on); "0" while
- * waiting for a call.
+ * follow_call's cursor: "<call tag>.<following id>:<lines seen>". Without the
+ * following id, or as a bare number, it comes from rounds of an older version
+ * (a bare number: the call those rounds were on); "0" while waiting for a call.
  */
 export function parseCursor(value) {
-  if (value === undefined || value === null || value === "") return { given: false, tag: null, n: 0 };
-  const m = /^\s*([a-z0-9]{1,16}):(\d+)\s*$/i.exec(String(value));
-  if (m) return { given: true, tag: m[1].toLowerCase(), n: Number(m[2]) };
+  if (value === undefined || value === null || value === "") return { given: false, tag: null, gen: null, n: 0 };
+  const m = /^\s*([a-z0-9]{1,16})(?:\.([a-z0-9]{1,8}))?:(\d+)\s*$/i.exec(String(value));
+  if (m) return { given: true, tag: m[1].toLowerCase(), gen: m[2] ? m[2].toLowerCase() : null, n: Number(m[3]) };
   const n = Number(value);
-  return Number.isInteger(n) && n >= 0 ? { given: true, tag: null, n } : { given: false, tag: null, n: 0 };
+  return Number.isInteger(n) && n >= 0 ? { given: true, tag: null, gen: null, n } : { given: false, tag: null, gen: null, n: 0 };
 }
 
 /**
@@ -589,7 +603,7 @@ export function parseCursor(value) {
 function callFor(calls, tag, fallback) {
   if (!tag) return { call: fallback };
   const named = calls.find((c) => callTag(c.id) === tag);
-  if (!named) return { unknown: `no call has the tag "${tag}": pass the tag from follow_call's cursor (the part before the colon), or leave call out` };
+  if (!named) return { unknown: `no call has the tag "${tag}": pass the tag from follow_call's cursor (its start, before the dot), or leave call out` };
   if (named.status === "ended") return { over: "has ended" };
   if (newestCall(calls).id !== named.id) return { over: "is over: the user started a new call after it" };
   return { call: named };
@@ -657,6 +671,29 @@ async function markAnswered(db, room, answered, now, call) {
 async function loadFollow(db, room) {
   const row = await db.prepare("SELECT * FROM follows WHERE room = ?1").bind(room).first();
   return row ? { callId: row.call_id, rounds: row.rounds, readAt: row.read_at, cursor: row.cursor } : null;
+}
+
+async function loadFollower(db, room) {
+  const row = await db.prepare("SELECT * FROM followers WHERE room = ?1").bind(room).first();
+  return row ? { callId: row.call_id, gen: row.gen, took: row.took } : null;
+}
+
+async function saveFollower(db, room, callId, gen, took = 0) {
+  await db
+    .prepare(
+      `INSERT INTO followers (room, call_id, gen, took) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT (room) DO UPDATE SET call_id = excluded.call_id, gen = excluded.gen, took = excluded.took`,
+    )
+    .bind(room, callId, gen, took)
+    .run();
+}
+
+/** What the page shows of Claude following its call: the rounds, when it last read, and how long its last round took. */
+async function followFor(db, room, callId) {
+  const follow = await loadFollow(db, room);
+  if (!follow || (callId && follow.callId !== callId)) return callId ? null : follow;
+  const lead = await loadFollower(db, room);
+  return { ...follow, took: lead && lead.callId === follow.callId ? lead.took : 0 };
 }
 
 async function saveFollow(db, room, f) {
@@ -746,7 +783,12 @@ const FOLLOW_HOW =
   "(1-3 items, the most urgent first), topic, \"remember\" for new names, numbers, dates, decisions, and \"answered\" for briefing " +
   "questions or objectives now settled. They show in the page at once; then the round waits for new lines. Leave suggestions out " +
   "when the new lines are small talk, silence or noise.\n" +
-  "4. Don't write in the chat until the call ends.";
+  "4. Be quick: a round should take you a few seconds. Short suggestions, no long deliberation: a late suggestion is a useless one. " +
+  "The next rounds are short (the new lines, and now and then what is still open): keep in mind what this round says.\n" +
+  "5. Don't write in the chat until the call ends.";
+
+/** A new following of a call: a short id, carried by the cursor, so an older following of the same call can tell it was replaced. */
+const newGen = () => Math.random().toString(36).slice(2, 6);
 
 /**
  * One round of follow_call: show what Claude passed for the lines it just read,
@@ -756,10 +798,18 @@ const FOLLOW_HOW =
  * The first round (no cursor) picks the call in progress, or waits for the
  * user to press Start. From then on the cursor names that call: the rounds stay
  * on it, and stop when it ends or a new call starts (that one is followed only
- * when the user asks again, from the chat they choose).
+ * when the user asks again, from the chat they choose). Asked again for the
+ * same call (a new chat, when the first one got slow), the newest following
+ * takes over and the older one is told to stop.
+ *
+ * After the first round, rounds stay short so that the conversation, which
+ * grows with every round, doesn't slow Claude down over a long call: the new
+ * lines (only the last minute when Claude fell behind), and now and then the
+ * languages and what is still open.
  */
 async function followRound(args, ctx) {
   const { db, room, app, waitS } = ctx;
+  const entered = Date.now();
   const cur = parseCursor(args.cursor);
   let metas = await loadCallMetas(db, room, Date.now());
   const prev = await loadFollow(db, room);
@@ -772,13 +822,16 @@ async function followRound(args, ctx) {
     const top = newestCall(list);
     return Boolean(top && top.id !== call.id && top.startedAt > call.startedAt);
   };
+  // Asked again for this call since (another chat, or this one again): this following is replaced.
+  let lead = await loadFollower(db, room);
+  const replaced = (call) => Boolean(bound && call && lead && lead.callId === call.id && lead.gen !== cur.gen);
   const read = callReader(db, room);
 
   // What Claude passed for the lines it just read: shown at once, on the call this conversation follows.
   let shown = "";
   const show = cleanSuggestions(args);
   const showTo = target(metas);
-  if (show && showTo && showTo.status !== "ended" && !(bound && superseded(metas, showTo))) {
+  if (show && showTo && showTo.status !== "ended" && !(bound && superseded(metas, showTo)) && !replaced(showTo)) {
     await showFor(db, room, showTo, show, Date.now());
     const n = show.suggestions.length;
     shown = `Shown in the page: ${n} suggestion${n === 1 ? "" : "s"}${show.remember.length ? `, ${show.remember.length} to remember` : ""}.\n`;
@@ -793,7 +846,7 @@ async function followRound(args, ctx) {
       const meta = target(metas);
       if (!bound && meta) break;
       if (bound) {
-        if (!meta || meta.status === "ended" || superseded(metas, meta)) break;
+        if (!meta || meta.status === "ended" || superseded(metas, meta) || replaced(meta)) break;
         const call = await read(meta);
         const fresh = call ? newLines(call, cur.n) : [];
         if (fresh.length >= FOLLOW_TRIGGER_LINES || fresh.some(isQuestionToUser)) break;
@@ -804,6 +857,7 @@ async function followRound(args, ctx) {
       }
       await sleep(Math.max(0, Math.min(WAIT_POLL_MS, until - Date.now())));
       metas = await loadCallMetas(db, room, Date.now());
+      lead = await loadFollower(db, room);
     }
   }
   const now = Date.now();
@@ -839,10 +893,27 @@ async function followRound(args, ctx) {
       "in one line; to follow the new call, they press «Fai seguire a Claude» in the page and paste the request in the chat they choose."
     );
   }
+  // Rounds from before following had ids (no id in the cursor) adopt one, unless another following started since.
+  if (bound && !cur.gen && lead && lead.callId === call.id) lead = { ...lead, legacy: true };
+  if (replaced(call) || (lead && lead.legacy)) {
+    return (
+      "Another conversation is now following this call (the user asked again, maybe in a new chat). Stop following now and send " +
+      "nothing more. In the chat, tell the user in one line that the other chat took over."
+    );
+  }
   const tag = callTag(call.id);
+  // How long Claude took since the last round gave it lines (a pause of minutes is not slowness: left out).
+  const tookS = bound && prev && prev.callId === call.id ? Math.round((entered - prev.readAt) / 1000) : 0;
+  let gen = cur.gen;
+  if (!bound || !gen) {
+    gen = newGen();
+    await saveFollower(db, room, call.id, gen);
+  } else if (tookS > 0 && tookS <= 120) {
+    await saveFollower(db, room, call.id, gen, tookS);
+  }
   const rounds = prev && prev.callId === call.id ? prev.rounds + 1 : 1;
   const top = lastN(call);
-  const cursor = `${tag}:${top}`;
+  const cursor = `${tag}.${gen}:${top}`;
   await saveFollow(db, room, { callId: call.id, rounds, readAt: now, cursor: top });
 
   const silentFor = Math.round((now - call.updatedAt) / 1000);
@@ -853,19 +924,18 @@ async function followRound(args, ctx) {
     );
   }
   if (silentFor > STALE_S) {
-    return `${shown}Round ${rounds} · the Call Assistant page hasn't been in touch for ${silentFor} s: it may be reconnecting. Keep waiting: call follow_call again with cursor="${bound ? `${tag}:${cur.n}` : cursor}".`;
+    return `${shown}Round ${rounds} · the Call Assistant page hasn't been in touch for ${silentFor} s: it may be reconnecting. Keep waiting: call follow_call again with cursor="${bound ? `${tag}.${gen}:${cur.n}` : cursor}".`;
   }
   const first = !bound; // this conversation starts following this call
-  const seen = first ? 0 : cur.n;
   const briefing = briefingFor(await loadContext(db, room, now), call);
   const others = othersLanguage(call);
   const user = LANG_NAMES[call.ui] || "Italian";
+  const languages = `Languages: the others speak ${others}; the user's language is ${user}. Write "say" in ${others}; "why", "topic" and "remember" in ${user}.`;
   const out = [];
-  out.push(`${shown}Round ${rounds} · call ${tag} · call time ${length} · in progress · ${call.lines.length} lines.`);
-  out.push(`Languages: the others speak ${others}; the user's language is ${user}. Write "say" in ${others}; "why", "topic" and "remember" in ${user}.`);
-  const fresh = first ? call.lines.filter((l) => l.t >= lengthOf(call) - 180) : newLines(call, seen);
   if (first) {
     // The first round for this conversation: the briefing of this call, the call so far, the method.
+    const fresh = call.lines.filter((l) => l.t >= lengthOf(call) - 180);
+    out.push(`${shown}Round ${rounds} · call ${tag} · call time ${length} · in progress · ${call.lines.length} lines.`, languages);
     out.push("", briefing ? describeContext(briefing).trim() : "This call has no briefing yet: every call starts without one.");
     const what = "(objectives, questions the user wants to ask, their positions, the people, names and acronyms for the glossary)";
     out.push(
@@ -876,37 +946,46 @@ async function followRound(args, ctx) {
     );
     out.push("", fresh.length ? `The call so far (last 3 minutes, ${fresh.length} of ${call.lines.length} lines). ${TRANSCRIPT_NOTE}` : "Nothing has been said yet.");
     for (const l of fresh) out.push(lineText(l));
-    out.push("", FOLLOW_HOW);
-  } else if (!fresh.length) {
-    return `${shown}Round ${rounds} · nothing new in the last ${waitS} s. Call follow_call again with cursor="${cursor}".`;
-  } else {
-    const shownLines = fresh.slice(-40);
-    const firstT = Math.min(...shownLines.map((l) => l.t));
-    const context = call.lines.filter((l) => l.n <= seen && l.t <= firstT).slice(-2);
-    if (context.length) out.push("", "Just before (already seen):", ...context.map(lineText));
-    out.push("", `New${shownLines.length < fresh.length ? ` (the last ${shownLines.length} of ${fresh.length})` : ""}:`, ...shownLines.map(lineText));
-    const asked = shownLines.filter(isQuestionToUser).slice(-2);
-    if (asked.length) out.push("", `They asked the user: ${asked.map((l) => `"${l.text}"`).join(" ")} Answer that first.`);
+    out.push("", FOLLOW_HOW, "", `Next: call follow_call with cursor="${cursor}" and, if the lines give you anything useful, suggestions with topic, remember and answered.`);
+    return out.join("\n");
   }
-  if (briefing && !first) {
+
+  const fresh = newLines(call, cur.n);
+  if (!fresh.length) return `${shown}Round ${rounds} · nothing new. Call follow_call again with cursor="${cursor}".`;
+  // Fell behind (a slow round, a burst of lines): only the last minute, so the suggestions are about what is said now.
+  const end = lengthOf(call);
+  let recent = fresh.filter((l) => l.t >= end - RECENT_S).slice(-RECENT_LINES);
+  if (!recent.length) recent = fresh.slice(-RECENT_LINES);
+  const skipped = fresh.filter((l) => !recent.includes(l));
+  out.push(`${shown}Round ${rounds} · call time ${length} · ${fresh.length} new line${fresh.length === 1 ? "" : "s"}.`);
+  if (tookS > SLOW_ROUND_S) out.push(`Your last round took ${tookS} s, and the call went on meanwhile: keep rounds short, decide fast, suggest briefly.`);
+  if (skipped.length) {
+    out.push(`(${skipped.length} earlier new line${skipped.length === 1 ? "" : "s"} skipped: you are behind. React to what is being said now.)`);
+    const missed = skipped.filter((l) => isQuestionToUser(l) && l.t >= end - 120).slice(-1);
+    if (missed.length) out.push(`Earlier they asked the user: "${missed[0].text}"`);
+  } else {
+    const firstT = Math.min(...recent.map((l) => l.t));
+    const context = call.lines.filter((l) => l.n <= cur.n && l.t <= firstT).slice(-1);
+    if (context.length) out.push(`Just before: ${lineText(context[0])}`);
+  }
+  out.push("New:", ...recent.map(lineText));
+  const asked = recent.filter(isQuestionToUser).slice(-2);
+  if (asked.length) out.push(`They asked the user: ${asked.map((l) => `"${l.text}"`).join(" ")} Answer that first.`);
+  // Now and then (and when they ask the user something): the languages and what is still open.
+  if (rounds % 10 === 0) out.push(languages);
+  if (briefing && (rounds % 4 === 0 || asked.length)) {
     const { objectives, questions } = briefingItems(briefing);
-    const open = (list) => list.filter((x) => !x.done).slice(0, 5).map((x) => `"${x.text.slice(0, 120)}"`);
-    const q = open(questions);
-    const o = open(objectives);
-    if (q.length || o.length) {
-      out.push("", `Still open in the briefing: ${[q.length ? `questions ${q.join("; ")}` : "", o.length ? `objectives ${o.join("; ")}` : ""].filter(Boolean).join(" · ")}`);
-    }
+    const open = (list, n) => list.filter((x) => !x.done).slice(0, n).map((x) => `"${x.text.slice(0, 80)}"`);
+    const q = open(questions, 3);
+    const o = open(objectives, 2);
+    if (q.length || o.length) out.push(`Still open: ${[...q, ...o].join("; ")}`);
   }
   const last = await loadSuggestions(db, room);
   if (last && last.callId === call.id) {
-    const said = [...(last.suggestions || []), ...(last.previous || [])].slice(0, 6).map((x) => `"${(x.say || x.text).slice(0, 100)}"`);
-    if (said.length) out.push(`Already suggested (don't repeat): ${said.join("; ")}`);
+    const said = [...(last.suggestions || []), ...(last.previous || [])].slice(0, 3).map((x) => `"${(x.say || x.text).slice(0, 80)}"`);
+    if (said.length) out.push(`Already suggested: ${said.join("; ")}`);
   }
-  out.push(
-    "",
-    `Next: call follow_call with cursor="${cursor}" and, if the new lines give you anything useful, suggestions (1-3 items, most urgent first) ` +
-      "with topic, remember and answered. Don't write in the chat.",
-  );
+  out.push(`Next: follow_call with cursor="${cursor}", plus suggestions if the new lines call for them. No chat text.`);
   return out.join("\n");
 }
 
@@ -1018,7 +1097,9 @@ async function callTool(name, args, ctx) {
       return toolText(`Saved with call ${call.id}, which has ended: the user sees it if that call is still open in the Call Assistant.`);
     }
     const follow = await loadFollow(db, room);
-    const next = follow && follow.callId === call.id ? ` Next: call follow_call with cursor="${callTag(call.id)}:${follow.cursor}".` : "";
+    const lead = await loadFollower(db, room);
+    const gen = lead && lead.callId === call.id ? `.${lead.gen}` : "";
+    const next = follow && follow.callId === call.id ? ` Next: call follow_call with cursor="${callTag(call.id)}${gen}:${follow.cursor}".` : "";
     return toolText(`Shown in the Call Assistant window, next to the transcript.${next}`);
   }
   if (name === "list_calls") return toolText(describeList(await loadCalls(db, room, now), now, app));
@@ -1146,12 +1227,11 @@ async function api(request, env, key, action) {
     const calls = await loadCallMetas(db, room, now);
     const call = id ? calls.find((c) => c.id === id) || { id, startedAt: id, updatedAt: now } : currentCall(calls, now);
     const suggestions = await loadSuggestions(db, room);
-    const follow = await loadFollow(db, room);
     return json({
       ok: true,
       suggestions: !id || (suggestions && suggestions.callId === id) ? suggestions : null,
       meeting: meetingOf(briefingFor(await loadContext(db, room, now), call)),
-      follow: !id || (follow && follow.callId === id) ? follow : null,
+      follow: await followFor(db, room, id),
     });
   }
   if (request.method !== "POST") return json({ ok: false, error: "method" }, 405);
@@ -1167,12 +1247,11 @@ async function api(request, env, key, action) {
     // The answer brings back what Claude asked to show for this call, and its briefing, if any.
     const briefing = briefingFor(await loadContext(db, room, now), call);
     const suggestions = await loadSuggestions(db, room);
-    const follow = await loadFollow(db, room);
     return json({
       ok: true,
       suggestions: suggestions && suggestions.callId === call.id ? suggestions : null,
       meeting: meetingOf(briefing),
-      follow: follow && follow.callId === call.id ? follow : null,
+      follow: await followFor(db, room, call.id),
     });
   }
   if (action === "delete") {
@@ -1181,6 +1260,7 @@ async function api(request, env, key, action) {
       db.prepare("DELETE FROM suggestions WHERE room = ?1").bind(room),
       db.prepare("DELETE FROM contexts WHERE room = ?1").bind(room),
       db.prepare("DELETE FROM follows WHERE room = ?1").bind(room),
+      db.prepare("DELETE FROM followers WHERE room = ?1").bind(room),
     ]);
     return json({ ok: true });
   }
