@@ -197,6 +197,10 @@ await step("always-on-top window: the live panel keeps updating there, and Stop 
   const before = await pip.evaluate(() => document.querySelectorAll("#transcript .line").length);
   await pip.waitForFunction((n) => document.querySelectorAll("#transcript .line").length > n + 2, before, { timeout: 20000 });
   await pip.waitForFunction(() => document.getElementById("timer").textContent !== "00:00", null, { timeout: 5000 });
+  // Over the call: dark like the page, no capsule, only Stop.
+  assert.equal(await pip.evaluate(() => document.documentElement.dataset.theme), "dark");
+  for (const id of ["#status", "#timer", "#ask-claude", "#pip", "#live-language"]) assert.ok(await pip.isHidden(id), `${id} hidden on top`);
+  assert.ok(await pip.isVisible("#stop"));
   await pip.click("#stop");
   await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
   assert.ok(await page.evaluate(() => Boolean(document.getElementById("live"))), "the panel is back in the page");
@@ -513,9 +517,18 @@ await step("bridge at another address (e.g. the app on GitHub Pages): connect it
   await page.context().close();
 });
 
-await step("settings: speech model loaded by hand, Claude chat link, interface language", async () => {
+await step("settings: speech model loaded by hand, Claude chat link, appearance, interface language", async () => {
   const page = await newPage("");
+  // Dark by default; light, or the system's, at once from Settings, and kept.
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "dark");
   await page.click('[data-tab="settings"]');
+  assert.equal(await page.inputValue("#ui-theme"), "dark");
+  await page.selectOption("#ui-theme", "light");
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light");
+  await page.selectOption("#ui-theme", "auto"); // the test browser's system theme is light
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), process.env.E2E_SCHEME === "dark" ? "dark" : "light");
+  await page.selectOption("#ui-theme", "dark");
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ca.settings.v1")).theme), "dark");
   // Model loaded by hand (company proxies that check downloads in a tab).
   assert.equal(await page.locator("#manual-links a").count(), 7);
   assert.equal(await page.textContent("#manual-status"), "");

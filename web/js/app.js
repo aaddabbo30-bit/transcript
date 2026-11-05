@@ -31,6 +31,7 @@ const DEFAULTS = {
   bridgeKey: "", // secret part of the bridge addresses, made on first use
   bridgeOn: false,
   connectorAdded: false, // the user added the connector on claude.ai: the Call tab stops showing that step
+  theme: "dark", // dark | light | auto (the system's)
 };
 const CLAUDE_NEW_CHAT = "https://claude.ai/new";
 
@@ -73,6 +74,15 @@ let bridgeHere = false; // the page is served by its bridge, so it is connected 
 let bridgeProblem = ""; // why the bridge at this address can't be used
 
 // ------------------------------------------------------------------ helpers
+/** Dark by default; light, or the system's, from Settings. The always-on-top window follows. */
+const systemDark = matchMedia("(prefers-color-scheme: dark)");
+function applyTheme() {
+  const theme = settings.theme === "light" ? "light" : settings.theme === "auto" && !systemDark.matches ? "light" : "dark";
+  for (const doc of [document, pipWindow && pipWindow.document]) if (doc) doc.documentElement.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0b0b0d" : "#f2f2f7");
+}
+systemDark.addEventListener?.("change", applyTheme);
+
 function applyTranslations() {
   document.documentElement.lang = settings.uiLanguage;
   document.title = t("app_title");
@@ -770,6 +780,7 @@ async function openPip() {
   }
   pipWindow.document.title = t("app_title");
   pipWindow.document.body.classList.add("pip");
+  applyTheme();
   const placeholder = document.createComment("live panel is in the always-on-top window");
   live.before(placeholder);
   pipWindow.document.body.append(live);
@@ -1020,6 +1031,7 @@ async function renderManualModel(note = "") {
 }
 
 function renderSettings() {
+  $("ui-theme").value = settings.theme;
   $("whisper-model").value = settings.whisperModel;
   renderManualModel();
   $("ui-language").value = settings.uiLanguage;
@@ -1129,6 +1141,12 @@ function wire() {
     $("claude-url-status").textContent = t("settings_saved");
   });
   $("whisper-model").addEventListener("change", () => renderManualModel());
+  // The appearance changes at once, as in the system's settings.
+  $("ui-theme").addEventListener("change", (e) => {
+    settings = { ...settings, theme: e.target.value };
+    saveSettings();
+    applyTheme();
+  });
   $("manual-files").addEventListener("change", async (e) => {
     const model = $("whisper-model").value || settings.whisperModel;
     try {
@@ -1169,6 +1187,7 @@ function wire() {
   setInterval(tick, 1000);
 }
 
+applyTheme();
 applyTranslations();
 wire();
 renderSetup();
