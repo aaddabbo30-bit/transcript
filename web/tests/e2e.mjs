@@ -266,7 +266,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   await page.setViewportSize({ width: 1200, height: 800 });
   page.on("pageerror", (e) => errors.push(String(e)));
   // (Old links to /web/... are redirected; the bridge's own tests cover it.)
-  await page.goto("https://app.test/?engine=scripted&speed=25");
+  await page.goto("https://app.test/?engine=scripted&speed=25&slow=0.5");
   await claudeTitle(page, /^Ultimo passo: aggiungi il connector su claude\.ai$/);
   const connector = await page.inputValue("#setup-connector");
   assert.match(connector, /^https:\/\/app\.test\/mcp\/[A-Za-z0-9_-]{32}$/);
@@ -344,7 +344,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
       call: tag,
     },
   }, appEnv);
-  assert.match(shown.content[0].text, new RegExp(`^Shown in the Call Assistant window, next to the transcript\\. Next: call follow_call with cursor="${tag}:\\d+"\\.$`));
+  assert.match(shown.content[0].text, new RegExp(`^Shown in the Call Assistant window, next to the transcript\\. Next: call follow_call with cursor="${tag}\\.[0-9a-z]+:\\d+"\\.$`));
   await page.waitForFunction(() => document.querySelectorAll("#suggestions .suggestion").length === 2, null, { timeout: 15000 });
   assert.ok(await page.isHidden("#thinking"), "the suggestions arrived: no longer thinking");
   assert.equal(await page.textContent("#sug-topic"), "Giulia ha un'offerta di lavoro a Milano");
@@ -372,8 +372,16 @@ await step("app served by its bridge: connected by itself, last step in the Call
   assert.equal(await clipboard(page), "Quando dovresti iniziare?");
   // The next set takes "now"; the earlier ones stay in the script below: nothing disappears.
   // The next round carries them: follow_call with what to show for the lines just read.
-  const [, cursor] = /cursor="([0-9a-z]+:\d+)"/.exec(round) || [];
-  assert.match(await readBridge(connector, "follow_call", { cursor, topic: "La data", suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] }, appEnv), /^Shown in the page: 1 suggestion\./);
+  const [, cursor] = /cursor="([0-9a-z]+\.[0-9a-z]+:\d+)"/.exec(round) || [];
+  const next = await readBridge(connector, "follow_call", { cursor, topic: "La data", suggestions: [{ kind: "answer", say: "Posso iniziare a gennaio." }] }, appEnv);
+  assert.match(next, /^Shown in the page: 1 suggestion\./);
+  // Claude's rounds are slow (here: over the test's threshold of half a second): the page offers a new chat, which takes over.
+  await new Promise((r) => setTimeout(r, 1500));
+  await readBridge(connector, "follow_call", { cursor: /cursor="([0-9a-z]+\.[0-9a-z]+:\d+)"/.exec(next)[1] }, appEnv);
+  await page.waitForFunction(() => /^Claude risponde in circa \d+ s ed è rimasto indietro\./.test(document.querySelector("#follow-state").textContent), null, { timeout: 15000 });
+  await Promise.all([page.waitForEvent("popup"), page.click("#follow-state button")]);
+  assert.match(await clipboard(page), /^Segui la mia call in diretta con il connector Call Assistant/);
+  assert.match(await page.textContent("#notice"), /^Copiato: incollalo nella chat nuova/);
   await page.waitForFunction(() => document.querySelectorAll("#script .item").length === 2, null, { timeout: 15000 });
   assert.equal(await page.textContent("#suggestions .suggestion .text"), "Posso iniziare a gennaio.");
   assert.deepEqual(await page.$$eval("#script .item .say", (els) => els.map((e) => e.textContent)), ["Quando dovresti iniziare?", "Non promettere una risposta entro oggi."]);

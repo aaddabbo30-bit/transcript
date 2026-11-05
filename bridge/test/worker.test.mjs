@@ -350,6 +350,9 @@ test("the meeting briefing: saved by Claude during a call, shown above the trans
 const heard = (texts, from = 1) =>
   texts.map(([speaker, text, lang = "en"], i) => ({ t: (from + i - 1) * 5, speaker, text, n: from + i, lang }));
 
+// The cursor a round gives back: "<call tag>.<following id>:<lines seen>".
+const cursorIn = (text) => (/cursor="([0-9a-z]+\.[0-9a-z]+:\d+)"/.exec(text) || [])[1];
+
 test("follow_call: the first round brings the call's briefing, the call so far and the method", async () => {
   const b = bridge();
   // No call yet: wait for it.
@@ -368,27 +371,29 @@ test("follow_call: the first round brings the call's briefing, the call so far a
   assert.match(first, /the others speak English; the user's language is Italian\. Write "say" in English; "why", "topic" and "remember" in Italian\./);
   assert.match(first, /Meeting briefing[\s\S]*Title: X-13 rollout[\s\S]*- Who tests on staging\?\nIf this conversation knows more about this meeting than the briefing above[\s\S]*merged with what is already there\./);
   assert.match(first, /The call so far \(last 3 minutes, 3 of 3 lines\)[\s\S]*\[00:10\] Them: Can you send the scripts\?/);
-  assert.match(first, /How to follow, every round:\n1\. [\s\S]*kind "answer"[\s\S]*3\. Call follow_call again right away with the cursor it gave you, and put in the same call what to show the user: suggestions[\s\S]*4\. Don't write in the chat until the call ends\./);
-  assert.match(first, new RegExp(`Next: call follow_call with cursor="${tag}:3" and, if the new lines give you anything useful, suggestions \\(1-3 items, most urgent first\\) with topic, remember and answered\\. Don't write in the chat\\.$`));
+  assert.match(first, /How to follow, every round:\n1\. [\s\S]*kind "answer"[\s\S]*3\. Call follow_call again right away with the cursor it gave you[\s\S]*4\. Be quick: a round should take you a few seconds\.[\s\S]*5\. Don't write in the chat until the call ends\./);
+  assert.match(first, new RegExp(`Next: call follow_call with cursor="${tag}\\.[0-9a-z]+:3" and, if the lines give you anything useful, suggestions with topic, remember and answered\\.$`));
+  const cursor = cursorIn(first);
   // The page sees that Claude follows the call.
   const follow = (await b.call("GET", `/api/${KEY}/suggestions?call=f1`)).data.follow;
   assert.deepEqual({ callId: follow.callId, rounds: follow.rounds, cursor: follow.cursor }, { callId: "f1", rounds: 2, cursor: 3 });
   assert.ok(Date.now() - follow.readAt < 5000);
   // show_suggestions says how to go on.
-  assert.match((await b.tool("show_suggestions", { suggestions: [{ kind: "answer", say: "Yes, by Friday." }], call: tag })).text, new RegExp(`Next: call follow_call with cursor="${tag}:3"\\.$`));
+  assert.match((await b.tool("show_suggestions", { suggestions: [{ kind: "answer", say: "Yes, by Friday." }], call: tag })).text, new RegExp(`Next: call follow_call with cursor="${cursor.replace(".", "\\.")}"\\.$`));
 });
 
-test("follow_call: the next rounds bring only what is new, what is still open, and what was already suggested", async () => {
+test("follow_call: the next rounds are short: what is new, now and then what is still open, and what was already suggested", async () => {
   const b = bridge();
   const base = [["them", "Hello everyone."], ["me", "Hi."], ["them", "Let's start with the budget."]];
   await b.call("POST", `/api/${KEY}/call`, { id: "f2", status: "live", lang: "en", lines: heard(base) });
   const tag = callTag("f2");
   await b.tool("set_meeting_context", { title: "Budget", questions: ["Who pays the licences?", "When do we start?"], objectives: ["Agree the budget"] });
-  await b.tool("follow_call");
+  const c3 = cursorIn((await b.tool("follow_call")).text);
+  const gen = c3.split(".")[1].split(":")[0];
   await b.tool("show_suggestions", { suggestions: [{ kind: "question", say: "Who pays the licences?" }], answered: [], call: tag });
 
-  // Nothing new: the round waits, then says so.
-  assert.match((await b.tool("follow_call", { cursor: `${tag}:3` })).text, new RegExp(`^Round 2 · nothing new in the last 0\\.3 s\\. Call follow_call again with cursor="${tag}:3"\\.$`));
+  // Nothing new: the round waits, then says so, in one line.
+  assert.equal((await b.tool("follow_call", { cursor: c3 })).text, `Round 2 · nothing new. Call follow_call again with cursor="${tag}.${gen}:3".`);
 
   // A question to the user ends the wait at once and comes first.
   const more = heard([["them", "The licences are on us."], ["them", "Can you start in January?"]], 4);
@@ -396,14 +401,24 @@ test("follow_call: the next rounds bring only what is new, what is still open, a
   const late = { t: 1, speaker: "me", text: "Thanks for having me.", n: 6, lang: "en" };
   await b.call("POST", `/api/${KEY}/call`, { id: "f2", status: "live", lang: "en", lines: [...heard(base), ...more, late] });
   // What Claude suggests for the lines it read goes in the same follow_call: shown at once, then the round waits.
-  const round = (await b.tool("follow_call", { cursor: `${tag}:3`, suggestions: [{ kind: "point", say: "Let's fix the scope first." }], answered: ["who pays the licences"] })).text;
-  assert.match(round, new RegExp(`^Shown in the page: 1 suggestion\\.\\nRound 3 · call ${tag} · call time 00:20 · in progress · 6 lines\\.`));
-  assert.match(round, /New:\n\[00:01\] Me: Thanks for having me\.\n\[00:15\] Them: The licences are on us\.\n\[00:20\] Them: Can you start in January\?/);
-  assert.match(round, /They asked the user: "Can you start in January\?" Answer that first\./);
-  // The licences question was answered: only the other one is open.
-  assert.match(round, /Still open in the briefing: questions "When do we start\?" · objectives "Agree the budget"/);
-  assert.match(round, /Already suggested \(don't repeat\): "Let's fix the scope first\."; "Who pays the licences\?"/);
-  assert.match(round, new RegExp(`follow_call with cursor="${tag}:6" and`));
+  const round = (await b.tool("follow_call", { cursor: c3, suggestions: [{ kind: "point", say: "Let's fix the scope first." }], answered: ["who pays the licences"] })).text;
+  assert.equal(
+    round,
+    [
+      "Shown in the page: 1 suggestion.",
+      "Round 3 · call time 00:20 · 3 new lines.",
+      "Just before: [00:00] Them: Hello everyone.",
+      "New:",
+      "[00:01] Me: Thanks for having me.",
+      "[00:15] Them: The licences are on us.",
+      "[00:20] Them: Can you start in January?",
+      'They asked the user: "Can you start in January?" Answer that first.',
+      // A question to the user: what is still open comes along (the licences question was answered).
+      'Still open: "When do we start?"; "Agree the budget"',
+      'Already suggested: "Let\'s fix the scope first."; "Who pays the licences?"',
+      `Next: follow_call with cursor="${tag}.${gen}:6", plus suggestions if the new lines call for them. No chat text.`,
+    ].join("\n"),
+  );
   assert.equal((await b.call("GET", `/api/${KEY}/suggestions?call=f2`)).data.suggestions.suggestions[0].say, "Let's fix the scope first.");
   const meeting = (await b.call("GET", `/api/${KEY}/suggestions?call=f2`)).data.meeting;
   assert.deepEqual(meeting.questions.map((q) => q.done), [true, false]);
@@ -412,13 +427,56 @@ test("follow_call: the next rounds bring only what is new, what is still open, a
   assert.deepEqual((await b.call("GET", `/api/${KEY}/suggestions?call=f2`)).data.meeting.questions.map((q) => q.done), [true, false]);
 
   // A few lines without a question: answered after a short wait (here: the test's short wait).
-  // A bare number, as rounds of the previous version gave: still the call those rounds were on.
+  // Every fourth round, what is still open comes along; the languages every tenth.
   await b.call("POST", `/api/${KEY}/call`, { id: "f2", status: "live", lang: "en", lines: [...heard(base), ...more, late, ...heard([["them", "Fine."]], 7)] });
-  assert.match((await b.tool("follow_call", { cursor: 6 })).text, new RegExp(`New:\\n\\[00:30\\] Them: Fine\\.[\\s\\S]*cursor="${tag}:7" and`));
+  const fine = (await b.tool("follow_call", { cursor: `${tag}.${gen}:6` })).text;
+  assert.match(fine, new RegExp(`^Round 4 · [\\s\\S]*New:\\n\\[00:30\\] Them: Fine\\.\\nStill open: "Is the date fixed\\?"[\\s\\S]*cursor="${tag}\\.${gen}:7"`));
+  assert.doesNotMatch(fine, /Languages/);
 
   // The end of the call ends the following.
   await b.call("POST", `/api/${KEY}/call`, { id: "f2", status: "ended", lines: heard(base) });
-  assert.match((await b.tool("follow_call", { cursor: `${tag}:7` })).text, /^The call has ended[\s\S]*Stop following now\. In the chat, tell the user in one line, and offer a summary/);
+  assert.match((await b.tool("follow_call", { cursor: `${tag}.${gen}:7` })).text, /^The call has ended[\s\S]*Stop following now\. In the chat, tell the user in one line, and offer a summary/);
+
+  // Rounds from before followings had ids (a cursor without one, or a bare number) adopt one.
+  const old = bridge();
+  await old.call("POST", `/api/${KEY}/call`, { id: "f3", status: "live", lang: "en", lines: heard(base) });
+  assert.match((await old.tool("follow_call", { cursor: `${callTag("f3")}:3` })).text, new RegExp(`cursor="${callTag("f3")}\\.[0-9a-z]+:3"`));
+});
+
+test("follow_call keeps Claude in step: only the last minute when it fell behind, and a word when a round took long", async (t) => {
+  const b = bridge();
+  let now = Date.parse("2026-11-05T09:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  await b.call("POST", `/api/${KEY}/call`, { id: "k1", status: "live", lang: "en", lines: heard([["them", "Hi."]]) });
+  const c1 = cursorIn((await b.tool("follow_call")).text);
+  // Claude thinks for 40 s; meanwhile 20 lines over 100 s, with a question to the user among the older ones.
+  now += 40 * 1000;
+  const said = Array.from({ length: 20 }, (_, i) => ({ t: 10 + i * 5, speaker: i % 2 ? "me" : "them", text: i === 6 ? "Can you send the figures?" : `line ${i}`, n: i + 2, lang: "en" }));
+  await b.call("POST", `/api/${KEY}/call`, { id: "k1", status: "live", lang: "en", lines: [...heard([["them", "Hi."]]), ...said] });
+  const round = (await b.tool("follow_call", { cursor: c1 })).text;
+  assert.match(round, /^Round 2 · call time 01:45 · 20 new lines\.\nYour last round took 40 s, and the call went on meanwhile: keep rounds short, decide fast, suggest briefly\./);
+  // The page sees how long Claude took, to offer a new chat when it keeps falling behind.
+  assert.equal((await b.call("GET", `/api/${KEY}/suggestions?call=k1`)).data.follow.took, 40);
+  assert.match(round, /\(8 earlier new lines skipped: you are behind\. React to what is being said now\.\)\nEarlier they asked the user: "Can you send the figures\?"/);
+  // Only the last minute: 12 lines, from 00:50 to 01:45.
+  assert.equal(round.split("New:\n")[1].split("\n").filter((l) => l.startsWith("[")).length, 12);
+  assert.match(round, /New:\n\[00:50\] Them: line 8\n[\s\S]*\[01:45\] Me: line 19\nNext: /);
+});
+
+test("follow_call: asked again for the same call (a new chat), the newest following takes over and the older stops", async () => {
+  const b = bridge();
+  await b.call("POST", `/api/${KEY}/call`, { id: "h1", status: "live", lang: "en", lines: heard([["them", "Hi."], ["me", "Hello."]]) });
+  const a = cursorIn((await b.tool("follow_call")).text); // the first chat
+  const c = cursorIn((await b.tool("follow_call")).text); // the user asks again, in a new chat
+  assert.notEqual(a, c);
+  await b.call("POST", `/api/${KEY}/call`, { id: "h1", status: "live", lang: "en", lines: heard([["them", "Hi."], ["me", "Hello."], ["them", "Shall we?"]]) });
+  // The first chat's next round, with what it wanted to show: not shown, and it stops.
+  const old = (await b.tool("follow_call", { cursor: a, suggestions: [{ kind: "point", say: "From the old chat." }] })).text;
+  assert.match(old, /^Another conversation is now following this call \(the user asked again, maybe in a new chat\)\. Stop following now and send nothing more\./);
+  assert.equal((await b.call("GET", `/api/${KEY}/suggestions?call=h1`)).data.suggestions, null);
+  // The new chat goes on.
+  assert.match((await b.tool("follow_call", { cursor: c, suggestions: [{ kind: "point", say: "From the new chat." }] })).text, /^Shown in the page: 1 suggestion\.\nRound \d+ · call time 00:10 · 1 new line\./);
+  assert.equal((await b.call("GET", `/api/${KEY}/suggestions?call=h1`)).data.suggestions.suggestions[0].say, "From the new chat.");
 });
 
 test("follow_call stays on its call: silences, a page gone quiet, a new call, rounds without a call", async (t) => {
@@ -430,27 +488,29 @@ test("follow_call stays on its call: silences, a page gone quiet, a new call, ro
   const q1 = iso(now);
   const tag1 = callTag(q1);
   await b.call("POST", `/api/${KEY}/call`, { id: q1, status: "live", lines: heard([["them", "Hi."]]) });
-  assert.match((await b.tool("follow_call")).text, new RegExp(`^Round 1 · call ${tag1} `));
+  const first = (await b.tool("follow_call")).text;
+  assert.match(first, new RegExp(`^Round 1 · call ${tag1} `));
+  const c1 = cursorIn(first);
   // A long silence: no new lines to send, but the page keeps asking for suggestions, so the call stays in progress.
   now += 100 * 1000;
   await b.call("GET", `/api/${KEY}/suggestions?call=${encodeURIComponent(q1)}`);
   now += 100 * 1000;
-  assert.match((await b.tool("follow_call", { cursor: `${tag1}:1` })).text, /^Round 2 · nothing new/);
+  assert.match((await b.tool("follow_call", { cursor: c1 })).text, /^Round 2 · nothing new/);
   assert.match((await b.tool("get_current_call")).text, /Status: in progress\. The page last sent an update 100 seconds ago\.\nCall language/);
   // The page goes quiet (network, sleep): Claude keeps waiting a few minutes, then stops.
   now += 3 * 60 * 1000;
-  assert.match((await b.tool("follow_call", { cursor: `${tag1}:1` })).text, new RegExp(`^Round 3 · the Call Assistant page hasn't been in touch for 280 s: it may be reconnecting\\. Keep waiting: call follow_call again with cursor="${tag1}:1"\\.$`));
+  assert.equal((await b.tool("follow_call", { cursor: c1 })).text, `Round 3 · the Call Assistant page hasn't been in touch for 280 s: it may be reconnecting. Keep waiting: call follow_call again with cursor="${c1}".`);
   now += 3 * 60 * 1000;
-  assert.match((await b.tool("follow_call", { cursor: `${tag1}:1` })).text, /hasn't been in touch for 8 minutes[\s\S]*Stop following/);
+  assert.match((await b.tool("follow_call", { cursor: c1 })).text, /hasn't been in touch for 8 minutes[\s\S]*Stop following/);
   // A new call: the rounds of the old one don't move to it, and can't write to it.
   const q2 = iso(now);
   await b.call("POST", `/api/${KEY}/call`, { id: q2, status: "live", lines: heard([["them", "New call."]]) });
-  const late = (await b.tool("follow_call", { cursor: `${tag1}:1`, suggestions: [{ kind: "point", say: "Old meeting." }] })).text;
+  const late = (await b.tool("follow_call", { cursor: c1, suggestions: [{ kind: "point", say: "Old meeting." }] })).text;
   assert.match(late, /^The call you were following is over: the user started a new call after it\. Stop following now, and send nothing more/);
   const stale = await b.tool("show_suggestions", { suggestions: [{ kind: "point", say: "Old meeting." }], call: tag1 });
   assert.ok(stale.isError);
   assert.match(stale.text, /^Not shown: the call you were following is over: the user started a new call after it\./);
-  assert.ok((await b.tool("set_meeting_context", { title: "Old meeting", call: `${tag1}:1` })).isError);
+  assert.ok((await b.tool("set_meeting_context", { title: "Old meeting", call: c1 })).isError);
   // A tag that names no call: said so, without stopping anything.
   assert.match((await b.tool("show_suggestions", { suggestions: [{ kind: "point", say: "x" }], call: "zz9" })).text, /^Not shown: no call has the tag "zz9": pass the tag from follow_call's cursor/);
   assert.equal((await b.call("GET", `/api/${KEY}/suggestions?call=${encodeURIComponent(q2)}`)).data.suggestions, null);
@@ -478,11 +538,12 @@ test("briefing helpers: done items, glossary for the transcription, cursors", ()
   const tag = callTag("2026-10-29T15:41:07.856Z");
   assert.match(tag, /^[0-9a-z]{8}$/);
   assert.notEqual(callTag("2026-10-29T15:41:07.857Z"), tag);
-  assert.deepEqual(parseCursor(`${tag}:57`), { given: true, tag, n: 57 });
-  assert.deepEqual(parseCursor(12), { given: true, tag: null, n: 12 });
-  assert.deepEqual(parseCursor("0"), { given: true, tag: null, n: 0 });
-  assert.deepEqual(parseCursor(undefined), { given: false, tag: null, n: 0 });
-  assert.deepEqual(parseCursor("boh"), { given: false, tag: null, n: 0 });
+  assert.deepEqual(parseCursor(`${tag}.a7f2:57`), { given: true, tag, gen: "a7f2", n: 57 });
+  assert.deepEqual(parseCursor(`${tag}:57`), { given: true, tag, gen: null, n: 57 });
+  assert.deepEqual(parseCursor(12), { given: true, tag: null, gen: null, n: 12 });
+  assert.deepEqual(parseCursor("0"), { given: true, tag: null, gen: null, n: 0 });
+  assert.deepEqual(parseCursor(undefined), { given: false, tag: null, gen: null, n: 0 });
+  assert.deepEqual(parseCursor("boh"), { given: false, tag: null, gen: null, n: 0 });
 });
 
 test("each call starts without a briefing: one is saved only during a call, for that call, and never reaches the next", async (t) => {

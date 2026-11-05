@@ -70,16 +70,17 @@ assert.match(prompt.messages[0].content.text, /^Sono in una chiamata adesso\.[\s
 const round = await client.callTool({ name: "follow_call", arguments: {} });
 const [, tag] = /^Round 1 · call ([0-9a-z]+) · call time 00:07 · in progress · 2 lines\./.exec(round.content[0].text) || [];
 assert.ok(tag, round.content[0].text);
-assert.match(round.content[0].text, new RegExp(`cursor="${tag}:2" and`));
+const [, cursor] = new RegExp(`cursor="(${tag}\\.[0-9a-z]+:2)" and`).exec(round.content[0].text) || [];
+assert.ok(cursor, round.content[0].text);
 const shown = await client.callTool({
   name: "show_suggestions",
   arguments: { topic: "Il lavoro a Milano", suggestions: [{ kind: "question", say: "Quando inizi?", why: "serve la data" }], call: tag },
 });
-assert.match(shown.content[0].text, new RegExp(`^Shown in the Call Assistant window[\\s\\S]*cursor="${tag}:2"\\.`));
+assert.ok(shown.content[0].text.startsWith("Shown in the Call Assistant window") && shown.content[0].text.endsWith(`cursor="${cursor}".`), shown.content[0].text);
 // The next round carries what to show for the lines just read.
 const next = await client.callTool({
   name: "follow_call",
-  arguments: { cursor: `${tag}:2`, topic: "La data", suggestions: [{ kind: "answer", say: "A gennaio.", why: "risponde" }] },
+  arguments: { cursor, topic: "La data", suggestions: [{ kind: "answer", say: "A gennaio.", why: "risponde" }] },
 });
 assert.match(next.content[0].text, /^Shown in the page: 1 suggestion\.\nRound 2 · nothing new/);
 await client.close();
