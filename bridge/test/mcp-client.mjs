@@ -50,7 +50,7 @@ const saved = await fetch(`${bridge.base}/api/${key}/call`, {
     ],
   }),
 });
-assert.deepEqual(await saved.json(), { ok: true, suggestions: null, meeting: null, follow: null });
+assert.deepEqual(await saved.json(), { ok: true, suggestions: null, meeting: null, follow: null, prompter: false });
 
 const client = new Client({ name: "bridge-test", version: "1.0.0" });
 await client.connect(new StreamableHTTPClientTransport(new URL(`${bridge.base}/mcp/${key}`)));

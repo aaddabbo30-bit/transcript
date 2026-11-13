@@ -22,6 +22,9 @@ const KEEP_CALLS = 10;
 const KEEP_CONTEXT_MS = KEEP_MS; // a briefing belongs to one call, and goes with it
 const STALE_S = 120; // a call the page hasn't been in touch with for this long is no longer in progress
 const TOUCH_MS = 15_000; // the page's polls keep its call in progress through silences, written at most this often
+const PROMPTER_S = 10; // a prompter (the Suggeritore window, or the view on a phone) that asked this recently is open
+const PROMPTER_LINES = 200; // the most transcript lines one prompter poll brings
+const PROMPTER_TOUCH_MS = 4000; // a prompter's polls are written at most this often
 const QUIET_GIVE_UP_S = 300; // follow_call keeps waiting this long for a page gone quiet before telling Claude to stop
 const MAX_BODY = 2_000_000;
 const MAX_LINES = 20000;
@@ -342,6 +345,14 @@ function ready(db) {
           data TEXT NOT NULL
         )`,
       ),
+      // When a prompter last asked for the call (see PROMPTER_S), one row per key: the page then keeps
+      // the suggestions and the transcript off its own screen, which may be shared.
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS prompters (
+          room TEXT PRIMARY KEY,
+          seen_at INTEGER NOT NULL
+        )`,
+      ),
     ])
     .catch((err) => {
       schemas.delete(db);
@@ -615,6 +626,12 @@ async function touchCall(db, room, id, now) {
     .prepare("UPDATE calls SET updated_at = ?3 WHERE room = ?1 AND id = ?2 AND status = 'live' AND updated_at < ?4")
     .bind(room, id, now, now - TOUCH_MS)
     .run();
+}
+
+/** A prompter asked for the call in the last PROMPTER_S seconds: it is open. */
+async function prompterOpen(db, room, now) {
+  const row = await db.prepare("SELECT seen_at FROM prompters WHERE room = ?1").bind(room).first();
+  return Boolean(row && now - row.seen_at <= PROMPTER_S * 1000);
 }
 
 async function saveContext(db, room, ctx, now) {
@@ -1232,6 +1249,33 @@ async function api(request, env, key, action) {
       suggestions: !id || (suggestions && suggestions.callId === id) ? suggestions : null,
       meeting: meetingOf(briefingFor(await loadContext(db, room, now), call)),
       follow: await followFor(db, room, id),
+      prompter: await prompterOpen(db, room, now),
+    });
+  }
+  if (action === "prompter" && request.method === "GET") {
+    // The prompter: the call in progress as Claude helps with it (suggestions, briefing, following) and its
+    // transcript lines after ?after=<n>. Asking marks the prompter open; it doesn't keep the call in progress.
+    const after = Number(new URL(request.url).searchParams.get("after")) || 0;
+    // Written at most every few seconds: the prompter asks every two.
+    await db
+      .prepare(
+        `INSERT INTO prompters (room, seen_at) VALUES (?1, ?2)
+         ON CONFLICT (room) DO UPDATE SET seen_at = excluded.seen_at WHERE prompters.seen_at < ?3`,
+      )
+      .bind(room, now, now - PROMPTER_TOUCH_MS)
+      .run();
+    const meta = liveCall(await loadCallMetas(db, room, now), now);
+    if (!meta) return json({ ok: true, call: null });
+    const call = await loadCall(db, room, meta.id);
+    const lines = ((call && call.lines) || []).filter((l) => l.n > after).sort((a, b) => a.n - b.n).slice(-PROMPTER_LINES);
+    const suggestions = await loadSuggestions(db, room);
+    return json({
+      ok: true,
+      call: { id: meta.id, startedAt: meta.startedAt, updatedAt: meta.updatedAt, lang: meta.lang },
+      lines,
+      suggestions: suggestions && suggestions.callId === meta.id ? suggestions : null,
+      meeting: meetingOf(briefingFor(await loadContext(db, room, now), meta)),
+      follow: await followFor(db, room, meta.id),
     });
   }
   if (request.method !== "POST") return json({ ok: false, error: "method" }, 405);
@@ -1252,6 +1296,7 @@ async function api(request, env, key, action) {
       suggestions: suggestions && suggestions.callId === call.id ? suggestions : null,
       meeting: meetingOf(briefing),
       follow: await followFor(db, room, call.id),
+      prompter: await prompterOpen(db, room, now),
     });
   }
   if (action === "delete") {
@@ -1261,6 +1306,7 @@ async function api(request, env, key, action) {
       db.prepare("DELETE FROM contexts WHERE room = ?1").bind(room),
       db.prepare("DELETE FROM follows WHERE room = ?1").bind(room),
       db.prepare("DELETE FROM followers WHERE room = ?1").bind(room),
+      db.prepare("DELETE FROM prompters WHERE room = ?1").bind(room),
     ]);
     return json({ ok: true });
   }

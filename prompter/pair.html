@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Suggeritore</title>
+<style>
+  :root { color-scheme: dark; --canvas: #1f1f1f; --card: #292929; --fg1: #fff; --fg2: #d6d6d6; --fg3: #adadad; --stroke: #666; --brand: #4f52b2; --brand-hover: #5b5fc7; --brand-fg: #7f85f5; --danger-fg: #dc626d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--canvas); color: var(--fg1); font: 14px/20px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+  .card { background: var(--card); border-radius: 8px; padding: 16px 20px; box-shadow: 0 0 2px rgba(0,0,0,.24), 0 2px 4px rgba(0,0,0,.28); }
+  h1 { font-size: 20px; line-height: 28px; font-weight: 600; margin: 0 0 8px; }
+  p { color: var(--fg3); margin: 8px 0; }
+  ol { color: var(--fg2); padding-left: 20px; margin: 12px 0; }
+  li { margin: 4px 0; }
+  label { display: block; color: var(--fg2); font-weight: 600; margin: 16px 0 4px; }
+  input { width: 100%; min-height: 32px; padding: 5px 10px; border-radius: 4px; background: #242424; color: var(--fg1); border: 1px solid var(--stroke); border-bottom-color: var(--fg3); font: inherit; }
+  input:focus-visible { outline: none; border-bottom-color: var(--brand-fg); box-shadow: inset 0 -1px 0 var(--brand-fg); }
+  button { margin-top: 12px; min-height: 32px; padding: 5px 16px; border-radius: 4px; border: 0; background: var(--brand); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:hover { background: var(--brand-hover); }
+  #status { min-height: 20px; color: var(--danger-fg); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Collega il Suggeritore</h1>
+    <p>Questa finestra non compare quando condividi lo schermo. Serve solo la prima volta:</p>
+    <ol>
+      <li>apri Call Assistant nel browser;</li>
+      <li>vai in <b>Impostazioni → Suggeritore</b> e premi <b>Copia il link del Suggeritore</b>;</li>
+      <li>incollalo qui sotto (Ctrl+V) e premi <b>Collega</b>.</li>
+    </ol>
+    <label for="link">Link del Suggeritore</label>
+    <input id="link" type="text" autocomplete="off" spellcheck="false" placeholder="https://…/?view=prompter#k=…">
+    <button id="go">Collega</button>
+    <p id="status" role="status"></p>
+  </div>
+<script>
+  const input = document.getElementById("link");
+  const status = document.getElementById("status");
+  async function pair() {
+    status.textContent = "";
+    const { ok } = await window.suggeritore.pair(input.value);
+    if (!ok) status.textContent = "Questo non è il link del Suggeritore: copialo di nuovo da Impostazioni → Suggeritore.";
+  }
+  document.getElementById("go").addEventListener("click", pair);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") pair(); });
+  // Already copied: it is filled in.
+  window.suggeritore.clipboardLink().then((link) => { if (link && !input.value) input.value = link; });
+  input.focus();
+</script>
+</body>
+</html>

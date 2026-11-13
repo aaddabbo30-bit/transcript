@@ -102,7 +102,22 @@ export class Bridge {
    */
   async suggestions(callId = "") {
     const data = await this.request("GET", callId ? `suggestions?call=${encodeURIComponent(callId)}` : "suggestions");
-    return { suggestions: data.suggestions || null, meeting: data.meeting || null, follow: data.follow || null };
+    return { suggestions: data.suggestions || null, meeting: data.meeting || null, follow: data.follow || null, prompter: Boolean(data.prompter) };
+  }
+
+  /**
+   * For the prompter (the Suggeritore): the call in progress (null: none), its transcript lines after
+   * line `after`, and what Claude shows for it. Asking tells the bridge the prompter is open.
+   */
+  async prompter(after = 0) {
+    const data = await this.request("GET", `prompter?after=${Math.max(0, Math.floor(after) || 0)}`);
+    return {
+      call: data.call || null,
+      lines: data.lines || [],
+      suggestions: data.suggestions || null,
+      meeting: data.meeting || null,
+      follow: data.follow || null,
+    };
   }
 
   clear() {
@@ -115,7 +130,7 @@ export class Bridge {
  * Claude asks to show for it (onSuggestions, each time it changes).
  */
 export class BridgeSync {
-  constructor({ bridge, session, intervalMs = 2000, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {}, onFollow = () => {} }) {
+  constructor({ bridge, session, intervalMs = 2000, onState = () => {}, onSuggestions = () => {}, onMeeting = () => {}, onFollow = () => {}, onPrompter = () => {} }) {
     this.bridge = bridge;
     this.session = session;
     this.intervalMs = intervalMs;
@@ -123,6 +138,8 @@ export class BridgeSync {
     this.onSuggestions = onSuggestions;
     this.onMeeting = onMeeting;
     this.onFollow = onFollow;
+    this.onPrompter = onPrompter;
+    this.prompter = false; // a prompter (the Suggeritore) shows this call: the page keeps it off its own screen
     this.meeting = undefined; // the briefing last passed on (JSON)
     this.follow = undefined; // Claude following the call, last passed on (JSON)
     this.state = null; // "ok" | "error"
@@ -156,7 +173,11 @@ export class BridgeSync {
     this.onState(state);
   }
 
-  receive(suggestions, meeting = null, follow = null) {
+  receive(suggestions, meeting = null, follow = null, prompter = false) {
+    if (Boolean(prompter) !== this.prompter) {
+      this.prompter = Boolean(prompter);
+      this.onPrompter(this.prompter);
+    }
     const m = JSON.stringify(meeting ? { ...meeting, updatedAt: undefined } : null);
     if (m !== this.meeting) {
       this.meeting = m;
@@ -178,7 +199,7 @@ export class BridgeSync {
       const reply = await this.bridge.send(call);
       this.sent = signature;
       this.setState("ok");
-      this.receive(reply && reply.suggestions, reply && reply.meeting, reply && reply.follow);
+      this.receive(reply && reply.suggestions, reply && reply.meeting, reply && reply.follow, reply && reply.prompter);
     } catch {
       this.setState("error");
     }
@@ -186,8 +207,8 @@ export class BridgeSync {
 
   async poll() {
     try {
-      const { suggestions, meeting, follow } = await this.bridge.suggestions(this.session.startedAt.toISOString());
-      this.receive(suggestions, meeting, follow);
+      const { suggestions, meeting, follow, prompter } = await this.bridge.suggestions(this.session.startedAt.toISOString());
+      this.receive(suggestions, meeting, follow, prompter);
       this.setState("ok");
     } catch {
       this.setState("error");
@@ -231,5 +252,105 @@ export class BridgeSync {
     clearInterval(this.timer);
     clearTimeout(this.nudged);
     this.timer = null;
+  }
+}
+
+/**
+ * The prompter's side (the Suggeritore, or the view on a phone): follows the
+ * call in progress through the bridge, without a session of its own. Lines
+ * arrive once each (onLines); a new call starts over (onCall).
+ */
+export class PrompterSync {
+  constructor({ bridge, intervalMs = 2000, onState = () => {}, onCall = () => {}, onLines = () => {}, onSuggestions = () => {}, onMeeting = () => {}, onFollow = () => {} }) {
+    this.bridge = bridge;
+    this.intervalMs = intervalMs;
+    Object.assign(this, { onState, onCall, onLines, onSuggestions, onMeeting, onFollow });
+    this.callId = null; // the call shown, kept after it ends until the next one starts
+    this.after = 0; // the last transcript line shown (its n)
+    this.shownAt = null;
+    this.meeting = undefined;
+    this.follow = undefined;
+    this.state = null; // "live" | "waiting" | "error"
+    this.timer = null;
+    this.busy = null;
+  }
+
+  start() {
+    this.timer = setInterval(() => this.tick(), this.intervalMs);
+    return this.tick();
+  }
+
+  stop() {
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  setState(state, call = null) {
+    if (state === this.state) return;
+    this.state = state;
+    this.onState(state, call);
+  }
+
+  tick() {
+    if (this.busy) return this.busy;
+    this.busy = this.poll().finally(() => {
+      this.busy = null;
+    });
+    return this.busy;
+  }
+
+  async poll() {
+    let data;
+    try {
+      data = await this.bridge.prompter(this.after);
+    } catch {
+      this.setState("error");
+      return;
+    }
+    const call = data.call;
+    if (!call) {
+      this.setState("waiting");
+      return;
+    }
+    if (call.id !== this.callId) {
+      // A new call: start over, and read its lines from the first.
+      this.callId = call.id;
+      this.after = 0;
+      this.shownAt = null;
+      this.meeting = undefined;
+      this.follow = undefined;
+      this.state = null;
+      this.onCall(call);
+      if (data.lines.length && data.lines[0].n > 1) {
+        try {
+          data = { ...data, ...(await this.bridge.prompter(0)) };
+        } catch {
+          this.setState("error");
+          return;
+        }
+        if (!data.call || data.call.id !== call.id) return;
+      }
+    }
+    this.setState("live", call);
+    const fresh = data.lines.filter((l) => l.n > this.after);
+    if (fresh.length) {
+      this.after = Math.max(this.after, ...fresh.map((l) => l.n));
+      this.onLines(fresh);
+    }
+    const m = JSON.stringify(data.meeting ? { ...data.meeting, updatedAt: undefined } : null);
+    if (m !== this.meeting) {
+      this.meeting = m;
+      this.onMeeting(data.meeting);
+    }
+    const f = JSON.stringify(data.follow);
+    if (f !== this.follow) {
+      this.follow = f;
+      this.onFollow(data.follow);
+    }
+    const s = data.suggestions;
+    if (s && s.updatedAt !== this.shownAt) {
+      this.shownAt = s.updatedAt;
+      this.onSuggestions(s);
+    }
   }
 }
