@@ -361,6 +361,7 @@ await step("app served by its bridge: connected by itself, last step in the Call
   if (SHOTS) {
     // After the arrival animation; then the same panel as narrow as the always-on-top window.
     await page.waitForFunction(() => !document.getElementById("now").classList.contains("fresh"), null, { timeout: 5000 });
+    await page.evaluate(() => document.getElementById("notice").classList.add("hidden")); // no toast in the picture
     await page.screenshot({ path: join(SHOTS, "web-suggestions.png"), clip: { x: 0, y: 0, width: 1200, height: 700 } });
     await page.setViewportSize({ width: 400, height: 640 });
     await page.evaluate(() => document.body.classList.add("pip"));

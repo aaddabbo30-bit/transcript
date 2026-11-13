@@ -6,6 +6,7 @@ import { BrowserAudioCapture, CaptureError, captureSupported } from "./audio.js"
 import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "./bridge.js";
 import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
+import { icon } from "./icons.js";
 import { ModelFileError, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, projectInstructions } from "./prompts.js";
 import { Banner } from "./motion.js";
@@ -81,7 +82,7 @@ const systemDark = matchMedia("(prefers-color-scheme: dark)");
 function applyTheme() {
   const theme = settings.theme === "light" ? "light" : settings.theme === "auto" && !systemDark.matches ? "light" : "dark";
   for (const doc of [document, pipWindow && pipWindow.document]) if (doc) doc.documentElement.dataset.theme = theme;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0b0b0d" : "#f2f2f7");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#1f1f1f" : "#f5f5f5");
 }
 systemDark.addEventListener?.("change", applyTheme);
 
@@ -145,19 +146,9 @@ function showTab(name) {
     b.classList.toggle("active", b.dataset.tab === name);
     b.setAttribute("aria-selected", String(b.dataset.tab === name));
   });
-  placeThumb();
   document.querySelectorAll(".tab").forEach((s) => s.classList.toggle("active", s.id === `tab-${name}`));
   if (name === "history") renderHistory();
   if (name === "settings") renderSettings();
-}
-
-/** The segmented control's selection slides under the active tab (from where it is, if it was still moving). */
-function placeThumb() {
-  const active = document.querySelector(".tabs button.active");
-  const thumb = document.querySelector(".seg-thumb");
-  if (!active || !thumb || !active.offsetWidth) return; // the bar is hidden during a call: keep where it was
-  thumb.style.width = `${active.offsetWidth}px`;
-  thumb.style.transform = `translateX(${active.offsetLeft}px)`;
 }
 
 // ------------------------------------------------------------- Claude box
@@ -209,7 +200,7 @@ function renderClaudeLayout() {
   $("live-body").classList.toggle("two", withClaude);
   show($("live-hint"), !withClaude);
   $("live-hint").textContent = t("live_hint_copy");
-  $("ask-claude").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
+  $("ask-claude-label").textContent = t(withClaude ? "btn_follow_claude" : "btn_ask_claude");
 }
 
 function resetLive() {
@@ -380,6 +371,7 @@ function addTranscriptLine(line) {
   const time = document.createElement("span");
   time.className = "time";
   time.textContent = fmtTime(line.t);
+  time.dataset.name = line.speaker === "me" ? t("speaker_me") : t("speaker_them"); // shown before the time, as in a chat
   const who = document.createElement("span");
   who.className = "who";
   who.textContent = `${line.speaker === "me" ? t("speaker_me") : t("speaker_them")}: `;
@@ -561,15 +553,8 @@ function showSuggestions(s) {
   if (fresh) markFresh(true);
 }
 
-// Symbols for the kinds of suggestion, drawn like SF Symbols (stroke, round caps).
-const svg = (d) => `<svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
-const KIND_ICONS = {
-  answer: svg('<path d="M8 5L3.5 9.5 8 14"/><path d="M3.5 9.5H12a4.5 4.5 0 014.5 4.5v1"/>'),
-  question: svg('<circle cx="10" cy="10" r="7.5"/><path d="M7.8 7.8a2.3 2.3 0 114.1 1.4c-.8.8-1.9 1.2-1.9 2.4"/><path d="M10 14.2v.1"/>'),
-  point: svg('<path d="M7.5 15.5h5"/><path d="M8 13c0-1.7-2.5-2.8-2.5-5.5a4.5 4.5 0 019 0C14.5 10.2 12 11.3 12 13z"/>'),
-  warning: svg('<path d="M10 3.2l7.3 12.6H2.7z"/><path d="M10 8.3v3.2"/><path d="M10 13.9v.1"/>'),
-};
-KIND_ICONS.comment = KIND_ICONS.point;
+// The kinds of suggestion, with their Fluent icons.
+const KIND_ICONS = { answer: "answer", question: "question", point: "point", comment: "point", warning: "warning" };
 
 function suggestionCard(item) {
   const say = item.say || item.text;
@@ -578,7 +563,7 @@ function suggestionCard(item) {
   card.title = t("click_to_copy");
   const kind = document.createElement("div");
   kind.className = `kind ${item.kind}`;
-  kind.innerHTML = KIND_ICONS[item.kind] || KIND_ICONS.point;
+  kind.innerHTML = icon(KIND_ICONS[item.kind] || "point", "kind-icon");
   kind.append(t(`kind_${item.kind}`));
   const text = document.createElement("div");
   text.className = "text";
@@ -624,7 +609,7 @@ function scriptItem(item, { pin = true } = {}) {
     const button = document.createElement("button");
     const on = script.pinned.has(item.key);
     button.className = `pin${on ? " on" : ""}`;
-    button.textContent = on ? "★" : "☆";
+    button.innerHTML = icon(on ? "pinned" : "pin");
     button.title = t(on ? "pin_remove" : "pin_add");
     button.setAttribute("aria-pressed", String(on));
     button.addEventListener("click", () => {
@@ -1216,7 +1201,6 @@ function wire() {
       t = translator(settings.uiLanguage);
       applyTranslations();
       renderSetup();
-      placeThumb();
     }
     $("settings-status").textContent = t("settings_saved");
   });
@@ -1230,6 +1214,10 @@ function wire() {
 }
 
 applyTheme();
+// The icons in the page's markup (Fluent System Icons, see icons.js).
+document.querySelectorAll("[data-icon]").forEach((el) => {
+  el.innerHTML = icon(el.dataset.icon);
+});
 applyTranslations();
 wire();
 renderSetup();
@@ -1241,10 +1229,6 @@ if (location.hash === "#moved") {
   history.replaceState(null, "", location.pathname + location.search);
 }
 
-// The segmented control's selection, placed at once, then sliding (also when the bar comes back after a call).
-placeThumb();
-requestAnimationFrame(() => document.querySelector(".segmented").classList.add("ready"));
-if ("ResizeObserver" in window) new ResizeObserver(placeThumb).observe(document.querySelector(".tabs"));
 // The bar's soft edge shows only once content scrolls under it.
 addEventListener("scroll", () => document.body.classList.toggle("scrolled", scrollY > 4), { passive: true });
 window.__callAssistant = { get session() { return session; } };

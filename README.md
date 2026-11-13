@@ -8,7 +8,7 @@ A personal assistant for your calls and videos, in the spirit of Proactor.ai but
 - **Every call starts from scratch.** A new call has no briefing and no suggestions. You choose the chat that follows it: a new chat, or one that already knows the meeting. That chat saves a briefing for this call only (goal, participants, your positions, objectives, questions to ask, names and acronyms), and its questions are ticked on the page as they get answered. Nothing of it reaches the next call.
 
 <p align="center">
-  <img src="docs/web-live.png" alt="The page during a call: at the top a dark capsule with the call's state, time and who is talking; on the left the meeting, Claude's latest suggestion, the briefing's questions and the list of everything suggested so far; on the right the transcript as a conversation" width="760">
+  <img src="docs/web-live.png" alt="The page during a call, in Microsoft Teams' design: at the top the meeting bar with the call's state, time, who is talking and a red Stop; on the left the meeting, Claude's latest suggestion and the briefing's questions; on the right the transcript as a Teams chat" width="760">
 </p>
 
 > The screenshots come from demo mode (a made-up call) rendered by the real app.
@@ -72,11 +72,11 @@ The connector address contains a secret key made by the page and kept in that br
    - for a call on your phone, put it on speaker and leave only *My microphone* ticked.
 
    The page switches to the call view:
-   - **At the top, the call's capsule** (like a Live Activity): its state, the time, and two small meters, **Io** and **Altri**, that move as you and the others speak. They show at a glance that both your microphone and the call's audio are coming in. Next to them: **Fai seguire a Claude**, **In primo piano** and **Stop**.
-   - **Claude's suggestions on the left**, **the transcript on the right** as a conversation (the others on the left, you on the right, in blue).
+   - **At the top, the meeting bar**, as in a Teams call: its state, the time, and two small meters, **Io** and **Altri**, that move as you and the others speak. They show at a glance that both your microphone and the call's audio are coming in. On the right: **Fai seguire a Claude**, **In primo piano** and a red **Stop**.
+   - **Claude's suggestions on the left**, **the transcript on the right** as a Teams chat: the others on the left with their name and time, you on the right in the brand tint.
    - New suggestions light up for a moment and say how fresh they are (*just now*, *12 s ago*). While Claude works on what was just said, the box says *Claude is thinking…*. When you are in another window, the tab's title says *New suggestions*.
-   - Messages come down from the top as banners and go away by themselves; flick one up (or tap it) to dismiss it.
-   - The design follows Apple's: the system font, the system colors, and your settings for less motion, less transparency or more contrast. The page is dark; **Settings → Appearance** switches it to light, or to the system's theme, at once.
+   - Messages come down from the top as toasts and go away by themselves; flick one up (or tap it) to dismiss it.
+   - The design is Microsoft Teams': Fluent 2 with the values of its Teams themes (brand colors, greys, Segoe UI, corners, shadows), the app bar on the left, Fluent icons. The page is dark like Teams; **Settings → Appearance** switches it to light, or to the system's theme, at once. It follows your settings for less motion and for high contrast. The browser tab shows a leaf, not a call or chat icon.
 2. **Let Claude follow the call.** Press **Fai seguire a Claude ↗ / Let Claude follow ↗**. It copies the request and, the first time, opens claude.ai. Paste it (Ctrl+V) and send in the chat you choose (with the connector on: the tools menu under the message box): **a new chat** follows the call from what is said in it, **the chat where you prepared the meeting** also brings what it knows. Or just write **«segui la chiamata»** / «follow the call» there; written before you press **Start**, Claude waits for the call (up to about 5 minutes).
    - Claude follows the call in rounds (tool `follow_call`). Each round waits for new lines, at once when the others ask you something, and tells Claude what is new, which briefing questions are still open and what it already suggested. Claude sends its suggestions with the next round itself: one tool call per round, so it reacts faster and goes further before claude.ai's limit on tool calls in one reply.
    - **Staying in step on long calls.** Every round adds to Claude's chat, and a long chat answers more slowly. So after the first round, rounds are short: the new lines, and only now and then what is still open. If Claude falls behind (a slow round, a burst of lines), the next round brings only the last minute and says so, keeping any question they asked you. A round that took Claude more than 20 s comes with a reminder to be quick.
@@ -93,7 +93,7 @@ The connector address contains a secret key made by the page and kept in that br
    - The connector also has prompts (**«Segui la chiamata»**, **«Cosa dico adesso?»**, **«Cosa mi hanno chiesto?»**, **«Riassumi la chiamata»**, under the chat's **+** button), but claude.ai doesn't show a custom connector's prompts everywhere. The button and the written request always work.
    - **Tip:** in **Settings → Instructions for a Claude Project**, copy the instructions into a claude.ai Project (e.g. «Calls») and prepare each meeting in a chat of that Project: every chat then knows how to follow a call.
 3. **Or ask when you need it.** Write «cosa dico adesso?», «what did they just ask me?», «what did we decide about the budget?». Claude reads the call with the connector's tools; its suggestions also go to the left column.
-4. **Always on top.** **In primo piano / On top** moves the live panel into a small window that stays above the call, in the same theme. There it shows only what you need: Claude's suggestions above the transcript, and **Stop** in the corner (the call's capsule stays in the page).
+4. **Always on top.** **In primo piano / On top** moves the live panel into a small window that stays above the call, in the same theme. There it shows only what you need: Claude's suggestions above the transcript, and **Stop** in the corner (the meeting bar stays in the page).
 5. **Stop.** Press **Stop** at the end. The end-of-call view lists everything Claude suggested. Then ask Claude for a summary (**Summary with Claude ↗** copies the request). The call is also kept in the app's **History**, with Claude's suggestions, where you can download the transcript.
 
 ### Meeting briefing
@@ -403,7 +403,8 @@ The web app needs no build step: plain ES modules, served as static files. It ne
 - `js/whisper-core.js`: the decoding, done by hand on top of the pipeline: the language token restricted to Italian and English, the no-speech probability, the average log-probability, Whisper's token filters at the right steps, and a `<|startofprev|>` prompt with the glossary. If it can't run with the loaded library, the worker falls back to the plain pipeline.
 - `js/session.js`: the call, from Start to Stop, with Whisper's queue (one window at a time; a speaker's waiting sentences joined) and the transcript's lag.
 - `js/bridge.js`: finds the bridge at the page's own address (asking again when it doesn't answer), or at the one given in Settings, and sends it the running call; its polls keep the call in progress through silences, and the end of the call is sent again until the bridge has it.
-- `js/motion.js`: springs (Apple's response and damping ratio) and the banners' flick gesture: motion that starts from where things are, carries the pointer's speed, and can be caught mid-flight.
+- `js/motion.js`: springs and the toasts' flick gesture: motion that starts from where things are, carries the pointer's speed, and can be caught mid-flight.
+- `js/icons.js` and `css/app.css`: the Teams look. The colors, greys, type ramp, corners, shadows and motion are the values of Fluent 2's Teams themes (`teamsDarkTheme`, `teamsLightTheme` in `@fluentui/tokens`); the icons are a few Fluent System Icons, as SVG paths. Nothing is loaded at run time: no component library, no CDN.
 - `js/script.js`: the call's script: every suggestion Claude sent, without repeats, grouped by arrival, with filters and pins; saved with the call in the history.
 - `js/prompts.js`: the requests that *Ask Claude* copies for a claude.ai chat.
 - `js/history.js`: past calls, in the browser's local storage.
@@ -481,6 +482,7 @@ This project is released under the [MIT License](LICENSE). It builds on open-sou
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (MIT), [CTranslate2](https://github.com/OpenNMT/CTranslate2) (MIT), OpenAI [Whisper](https://github.com/openai/whisper) models (MIT), [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, bundled with faster-whisper)
 - [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) (MIT, a PyAudio fork with WASAPI loopback) and [PortAudio](http://www.portaudio.com/) (MIT-style)
 - [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [NumPy](https://numpy.org) (BSD-3-Clause)
+- Web app design: the values of Microsoft's [Fluent UI](https://github.com/microsoft/fluentui) Teams themes (`@fluentui/tokens`, MIT) and a few [Fluent System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT). Microsoft Teams is a trademark of Microsoft; this project isn't affiliated with it.
 - Web app: [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0, loaded from jsDelivr) running the [onnx-community Whisper](https://huggingface.co/onnx-community/whisper-base) models (MIT)
 - The microphone + speaker loopback design was inspired by [ecoute](https://github.com/SevaSk/ecoute) (MIT).
 
