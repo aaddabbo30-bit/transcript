@@ -133,6 +133,8 @@ While the Suggeritore is open, the page in the browser keeps the suggestions and
 3. Run `npm start`. The window opens on top of the others. The first time, it also puts a **Suggeritore** icon on your Desktop: from then on, start it from there.
 4. The first time, it asks for its link. In the web app, go to **Settings → Suggeritore**, press **Copia il link del Suggeritore / Copy the prompter link**, then paste it in the window and press **Collega / Connect**. The link holds your bridge's key, like the connector address: keep it private.
 
+Company PCs often block programs and libraries started from your user folder (group policy, AppLocker). Then `npm start` stops with *This program is blocked by group policy*: that is your IT's rule, and only they can allow it. Use the Suggeritore on your phone instead (below).
+
 **Use it.** Start the call in the browser as usual, then the Suggeritore. Click a suggestion to copy it. Right-click in the window to reload it, change the text size, connect it again or quit; Ctrl + and Ctrl − change the text size too. The same link opened on a phone shows the same view, and a phone is never in your PC's screen share.
 
 ### The best transcript
