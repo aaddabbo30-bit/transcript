@@ -987,6 +987,7 @@ function renderBridge(note = "") {
   $("project-status").textContent = "";
   show($("prompter-card"), bridgeActive());
   $("prompter-status").textContent = "";
+  renderPrompterQr();
   $("bridge-status").textContent = note || (bridgeHere ? bridgeProblem : "");
 }
 
@@ -1035,6 +1036,48 @@ function renderPrompterNote() {
 /** The prompter's link: the bridge's page with the key after "#", which the browser never sends anywhere. */
 function prompterLink() {
   return `${settings.bridgeUrl}/?view=prompter#k=${settings.bridgeKey}`;
+}
+
+/**
+ * The prompter link as a QR code, so the phone pairs by pointing its camera
+ * (the link holds the bridge key). Drawn as an inline SVG, dark on white so it
+ * scans in either theme; the QR library (vendor/qrcode.mjs, MIT) loads only
+ * when the Suggeritore card is shown.
+ */
+let qrLib = null;
+async function renderPrompterQr() {
+  const box = $("prompter-qr");
+  if (!box) return;
+  if (!bridgeActive()) {
+    box.innerHTML = "";
+    return;
+  }
+  const link = prompterLink();
+  if (box.dataset.link === link && box.firstChild) return; // already drawn for this link
+  try {
+    qrLib = qrLib || (await import("../vendor/qrcode.mjs"));
+    const qr = qrLib.qrcode(0, "M"); // 0: smallest size that fits; M: recovers from ~15% damage
+    qr.addData(link);
+    qr.make();
+    box.innerHTML = qrSvg(qr);
+    box.dataset.link = link;
+    box.setAttribute("aria-label", t("prompter_qr_hint"));
+  } catch {
+    box.innerHTML = ""; // the copy link still works
+  }
+}
+
+/** One <svg>: the dark modules as a single path, with a 2-module quiet zone. */
+function qrSvg(qr) {
+  const n = qr.getModuleCount();
+  const margin = 2;
+  const size = n + margin * 2;
+  let d = "";
+  for (let r = 0; r < n; r += 1) for (let c = 0; c < n; c += 1) if (qr.isDark(r, c)) d += `M${c + margin} ${r + margin}h1v1h-1z`;
+  return (
+    `<svg viewBox="0 0 ${size} ${size}" width="160" height="160" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg">` +
+    `<rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#242424"/></svg>`
+  );
 }
 
 /** The key in a prompter link (or the key alone, pasted); null when there is none. */

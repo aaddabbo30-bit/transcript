@@ -135,6 +135,10 @@ While the Suggeritore is open, the page in the browser keeps the suggestions and
 
 Company PCs often block programs and libraries started from your user folder (group policy, AppLocker). Then `npm start` stops with *This program is blocked by group policy*: that is your IT's rule, and only they can allow it. Use the Suggeritore on your phone instead (below).
 
+**On a phone instead (no install, and nothing to run on the PC).** The same view runs on a phone, which is never in your PC's screen share. In the web app go to **Settings → Suggeritore** and point the phone's camera at the **QR code** (or press **Copia il link del Suggeritore** and open the link on the phone): the page opens already connected. Add it to the Home screen to use it like an app. During a call, open it on the phone with Call Assistant running on the PC: the page on the PC then hides Claude's column and the transcript, so the screen share shows nothing even if you share the whole screen. This is the way to use it on a locked-down work PC where the window above can't be installed.
+
+<img src="docs/web-prompter-settings.png" width="520" alt="Settings → Suggeritore: a Copy-link button and a QR code to open the prompter on a phone">
+
 **Use it.** Start the call in the browser as usual, then the Suggeritore. Click a suggestion to copy it. Right-click in the window to reload it, change the text size, connect it again or quit; Ctrl + and Ctrl − change the text size too. The same link opened on a phone shows the same view, and a phone is never in your PC's screen share.
 
 ### The best transcript
@@ -430,7 +434,7 @@ The web app needs no build step: plain ES modules, served as static files. It ne
 - `js/script.js`: the call's script: every suggestion Claude sent, without repeats, grouped by arrival, with filters and pins; saved with the call in the history.
 - `js/prompts.js`: the requests that *Ask Claude* copies for a claude.ai chat.
 - `js/history.js`: past calls, in the browser's local storage.
-- `?view=prompter`: the same page as the Suggeritore's view. It shows only the live panel, fed by `PrompterSync` (`js/bridge.js`) from the bridge's prompter endpoint, with no session or audio of its own. The key comes from the link's fragment (`#k=…`, which never reaches a server) and is kept in that browser's storage; in the browser where the app runs, the app's own key is used.
+- `?view=prompter`: the same page as the Suggeritore's view. It shows only the live panel, fed by `PrompterSync` (`js/bridge.js`) from the bridge's prompter endpoint, with no session or audio of its own. The key comes from the link's fragment (`#k=…`, which never reaches a server) and is kept in that browser's storage; in the browser where the app runs, the app's own key is used. **Settings → Suggeritore** also shows that link as a QR code, drawn as an inline SVG from `vendor/qrcode.mjs` (loaded only when the card is shown), so a phone pairs by camera.
 
 After changing anything in `js/` or `css/`, run `node web/tools/stamp.mjs`. It writes a hash of those files into `index.html` (`?v=…` links plus an import map), so browsers fetch a new version as a whole instead of mixing new and cached files. CI fails when the stamp is out of date.
 
@@ -516,7 +520,7 @@ This project is released under the [MIT License](LICENSE). It builds on open-sou
 - [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) (MIT, a PyAudio fork with WASAPI loopback) and [PortAudio](http://www.portaudio.com/) (MIT-style)
 - [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [NumPy](https://numpy.org) (BSD-3-Clause)
 - Web app design: the values of Microsoft's [Fluent UI](https://github.com/microsoft/fluentui) Teams themes (`@fluentui/tokens`, MIT) and a few [Fluent System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT). Microsoft Teams is a trademark of Microsoft; this project isn't affiliated with it.
-- Suggeritore: [Electron](https://github.com/electron/electron) (MIT, downloaded by `npm install`)
+- Suggeritore: [Electron](https://github.com/electron/electron) (MIT, downloaded by `npm install`); the pairing QR uses [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT, vendored in `web/vendor/`)
 - Web app: [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0, loaded from jsDelivr) running the [onnx-community Whisper](https://huggingface.co/onnx-community/whisper-base) models (MIT)
 - The microphone + speaker loopback design was inspired by [ecoute](https://github.com/SevaSk/ecoute) (MIT).
 

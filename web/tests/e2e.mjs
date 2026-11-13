@@ -437,8 +437,14 @@ await step("the Suggeritore: paired with its link, it shows the call in progress
   // Settings → Suggeritore: its link, with the bridge's key after "#".
   await page.click('[data-tab="settings"]');
   assert.ok(await page.isVisible("#prompter-card"));
+  // The prompter link is also a QR code, so the phone pairs by pointing its camera.
+  await page.waitForSelector("#prompter-qr svg path");
+  assert.ok((await page.getAttribute("#prompter-qr svg path", "d")).length > 100, "the QR has modules");
   await page.click("#prompter-copy");
   const link = await clipboard(page);
+  // The QR encodes exactly that link (same key).
+  assert.equal(await page.getAttribute("#prompter-qr", "data-link"), link);
+  if (SHOTS) await page.locator("#prompter-card").screenshot({ path: join(SHOTS, "web-prompter-settings.png") });
   const [, key] = /^https:\/\/app\.test\/\?view=prompter#k=([A-Za-z0-9_-]{32})$/.exec(link) || [];
   assert.ok(key, link);
   assert.match(await page.textContent("#prompter-status"), /^Link copiato/);
