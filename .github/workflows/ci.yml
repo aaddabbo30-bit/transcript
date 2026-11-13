@@ -119,6 +119,8 @@ jobs:
           node-version: "22"
       - name: index.html is stamped for the current scripts
         run: node web/tools/stamp.mjs --check
+      - name: The Suggeritore's scripts parse (prompter/, an Electron app)
+        run: for f in prompter/*.js; do node --check "$f"; done
       - name: Unit tests
         run: node --test web/tests/unit.test.mjs
       - name: Browser end-to-end test (fake microphone, mocked Claude API)

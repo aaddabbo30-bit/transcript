@@ -19,6 +19,7 @@ A personal assistant for your calls and videos, in the spirit of Proactor.ai but
    - [Set it up (once)](#set-it-up-once)
    - [Use it during a call](#use-it-during-a-call)
    - [Meeting briefing](#meeting-briefing)
+   - [The Suggeritore: a window the screen share doesn't show](#the-suggeritore-a-window-the-screen-share-doesnt-show)
    - [The best transcript](#the-best-transcript)
    - [Without the bridge: Ask Claude](#without-the-bridge-ask-claude)
    - [Privacy and limits](#privacy-and-limits)
@@ -93,7 +94,7 @@ The connector address contains a secret key made by the page and kept in that br
    - The connector also has prompts (**«Segui la chiamata»**, **«Cosa dico adesso?»**, **«Cosa mi hanno chiesto?»**, **«Riassumi la chiamata»**, under the chat's **+** button), but claude.ai doesn't show a custom connector's prompts everywhere. The button and the written request always work.
    - **Tip:** in **Settings → Instructions for a Claude Project**, copy the instructions into a claude.ai Project (e.g. «Calls») and prepare each meeting in a chat of that Project: every chat then knows how to follow a call.
 3. **Or ask when you need it.** Write «cosa dico adesso?», «what did they just ask me?», «what did we decide about the budget?». Claude reads the call with the connector's tools; its suggestions also go to the left column.
-4. **Always on top.** **In primo piano / On top** moves the live panel into a small window that stays above the call, in the same theme. There it shows only what you need: Claude's suggestions above the transcript, and **Stop** in the corner (the meeting bar stays in the page).
+4. **Always on top.** **In primo piano / On top** moves the live panel into a small window that stays above the call, in the same theme. There it shows only what you need: Claude's suggestions above the transcript, and **Stop** in the corner (the meeting bar stays in the page). That window is part of the browser: when you share your whole screen, it is shared too. To keep Claude's help out of the screen share, use the [Suggeritore](#the-suggeritore-a-window-the-screen-share-doesnt-show).
 5. **Stop.** Press **Stop** at the end. The end-of-call view lists everything Claude suggested. Then ask Claude for a summary (**Summary with Claude ↗** copies the request). The call is also kept in the app's **History**, with Claude's suggestions, where you can download the transcript.
 
 ### Meeting briefing
@@ -114,6 +115,25 @@ They are stored in that browser's cache, so the app finds them there. The status
 - **The end of the sentence.** A sentence is transcribed when it ends: after a 0.5 s pause, or after 8 s of continuous speech, cut at a quiet point.
 - **Whisper on your computer.** Whisper always works on a 30 s window, however short the sentence: one window takes about as long for "Okay" as for a long sentence. When the model loads, the page measures it and shows it (*1.4 s per block of speech*). While Whisper is busy, the sentences that arrive wait and are then transcribed together in one window (one speaker at a time, never across the other speaker), so the transcript never falls further and further behind. Served by your Worker, the page is *cross-origin isolated* (`web/_headers`), so Whisper runs on up to 4 CPU threads instead of 1; on GitHub Pages it runs on one, more slowly.
 - **To Claude.** Each new line reaches the bridge at once. A round of Claude ends as soon as the others ask you a question, or after a few new lines or seconds; its suggestions reach the page within about 2.5 s. Then it depends on how long Claude takes to answer: a model without extended thinking answers sooner.
+
+### The Suggeritore: a window the screen share doesn't show
+
+When you share your screen in Teams, everything on it is shared: the page, and its always-on-top window too. The **Suggeritore** (prompter) is a small Windows program that shows Claude's help in a window that **Windows leaves out of every capture**. You see it; the people watching your screen don't, and it isn't in recordings or screenshots either (Windows 10 version 2004 or later, Windows 11). The page in the browser keeps listening and transcribing as before. For the call in progress, the Suggeritore shows:
+- Claude's suggestions (*Now* and the script), the briefing's questions, and whether Claude is following;
+- the transcript.
+
+<img src="docs/web-prompter.png" width="300" alt="The Suggeritore: the call in progress, Claude's suggestion and the transcript, in a narrow window">
+
+While the Suggeritore is open, the page in the browser keeps the suggestions and the transcript off its own screen. In their place a line says they are in the Suggeritore, with **Mostra anche qui / Show here too**. A few seconds after you close the Suggeritore, they come back by themselves.
+
+**Install it once, from VS Code** (Node.js must be installed):
+1. Put the [`prompter/`](prompter/) folder on your PC, for example in `C:\Users\<you>\CallAssistant\Suggeritore`. It is six text files.
+2. Open that folder in VS Code, then a terminal (*Terminal → New Terminal*) and run `npm install`. It downloads Electron, about 100 MB.
+   - On a company network that reaches GitHub only through a mirror (Artifactory, Nexus…), point Electron's download at the mirror's copy of GitHub releases first. In cmd: `set ELECTRON_MIRROR=https://<mirror>/<github-releases-path>/electron/electron/releases/download/`.
+3. Run `npm start`. The window opens on top of the others. The first time, it also puts a **Suggeritore** icon on your Desktop: from then on, start it from there.
+4. The first time, it asks for its link. In the web app, go to **Settings → Suggeritore**, press **Copia il link del Suggeritore / Copy the prompter link**, then paste it in the window and press **Collega / Connect**. The link holds your bridge's key, like the connector address: keep it private.
+
+**Use it.** Start the call in the browser as usual, then the Suggeritore. Click a suggestion to copy it. Right-click in the window to reload it, change the text size, connect it again or quit; Ctrl + and Ctrl − change the text size too. The same link opened on a phone shows the same view, and a phone is never in your PC's screen share.
 
 ### The best transcript
 
@@ -149,7 +169,7 @@ Why not run the whole thing inside Claude? A page on claude.ai can't use the mic
 
 - **Audio:** transcribed inside your browser with Whisper (Transformers.js). It never leaves your computer.
 - **Transcript:** it goes to your own bridge on Cloudflare, and Claude reads it from there. The bridge keeps calls for 48 hours at most, and only the last 10, plus the latest suggestions Claude sent and the briefing of the call. **Delete the calls from the bridge** (Settings) removes them at once. The app's **History** keeps them in that browser only.
-- **The connector address is a secret:** whoever has it can read your calls. Keep it private; **Change secret address** makes a new one.
+- **The connector address is a secret:** whoever has it can read your calls. The Suggeritore's link holds the same key. Keep them private; **Change secret address** makes a new one (connect the Suggeritore again after that).
 - **Company networks:** some block `workers.dev`. The live panel then shows *Bridge to Claude unreachable*; use *Ask Claude* meanwhile.
 - **Claude follows the call only from a chat.** It starts when you ask (button or «segui la chiamata») and stops at the end of the call, when the page stops sending, or after 10 rounds without a call. Unless you chose *Always allow*, claude.ai asks before each use of the connector's tools. A long call means many rounds: on a Pro plan, a long meeting followed live can use a good share of the usage limit.
 - **Tell the people you talk with** that you are transcribing the call.
@@ -408,6 +428,7 @@ The web app needs no build step: plain ES modules, served as static files. It ne
 - `js/script.js`: the call's script: every suggestion Claude sent, without repeats, grouped by arrival, with filters and pins; saved with the call in the history.
 - `js/prompts.js`: the requests that *Ask Claude* copies for a claude.ai chat.
 - `js/history.js`: past calls, in the browser's local storage.
+- `?view=prompter`: the same page as the Suggeritore's view. It shows only the live panel, fed by `PrompterSync` (`js/bridge.js`) from the bridge's prompter endpoint, with no session or audio of its own. The key comes from the link's fragment (`#k=…`, which never reaches a server) and is kept in that browser's storage; in the browser where the app runs, the app's own key is used.
 
 After changing anything in `js/` or `css/`, run `node web/tools/stamp.mjs`. It writes a hash of those files into `index.html` (`?v=…` links plus an import map), so browsers fetch a new version as a whole instead of mixing new and cached files. CI fails when the stamp is out of date.
 
@@ -417,6 +438,7 @@ Tests:
 - `node --test web/tests/unit.test.mjs` runs 26 unit tests: segmentation and echo detection on a real recording (echo alone, the user alone, both talking at once), the decoding steps, the filters, Whisper's queue, full simulated calls, the chat requests, the bridge client, its suggestions and Claude's follow state.
 - `node web/tests/whisper-real.mjs` runs the decoding with the real `whisper-base` (Transformers.js on Node, downloaded from Hugging Face): Italian and English told apart, the same words as the plain pipeline, silence and noise dropped, the glossary prompt not echoed. CI runs it in its own job.
 - `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording. It covers:
+  - the Suggeritore's view: paired with the link from Settings (a wrong link refused), it waits for a call, then shows the call in progress, its transcript and Claude's suggestions, and keeps the call after it ends; meanwhile the page hides Claude's column and the transcript, and shows them again when asked;
   - the app served by its bridge: it connects by itself, shows the connector step, copies the request to follow the call, Claude's side follows the call over MCP and the page shows it (and that Claude is thinking), the suggestions Claude sends (with show_suggestions, or with the next follow_call round) appear left of the transcript, the earlier ones stay in the script (filters, pins, copy, the list after the call), the briefing's questions are ticked when answered, and a new call starts without the last call's briefing or suggestions;
   - a bridge that doesn't answer when the page opens: the call starts anyway, and Claude's column appears with the whole call as soon as the bridge answers;
   - a copy of the page at another address going to the page of its bridge, when the bridge serves the page;
@@ -430,6 +452,7 @@ Tests:
 
 A Cloudflare Worker with no dependencies, [`bridge/src/worker.js`](bridge/src/worker.js). It has three sides:
 - **For the page:** `POST /api/<key>/call` saves the current call, `GET /api/<key>/status` checks the bridge, and `POST /api/<key>/delete` clears the calls.
+- **For the Suggeritore:** `GET /api/<key>/prompter?after=<n>` gives the call in progress (none when no call is live), its transcript lines after line `n`, Claude's suggestions, the briefing and the follow state. Each request marks the prompter open for 10 seconds; the page reads it as `prompter` in its own answers and hides Claude's column and the transcript meanwhile.
 - **For Claude:** `POST /mcp/<key>` is an MCP server over Streamable HTTP, with JSON responses and no login.
   - `follow_call`: one round of following the call. The first picks the call in progress (or waits for the user to press Start, up to 12 rounds) and brings its briefing, if any, the last 3 minutes and the method; the next ones wait (up to 25 s; at once when the others ask a question, else after 3 lines or 8 s) and bring the new lines (by the order the page heard them, `n`), the questions to the user, the open briefing items, the suggestions already made, the languages to write in, and the cursor for the next round. The cursor (`<call tag>.<following id>:<lines seen>`) names the call and this following of it: the rounds stay on the call, stop when it ends or a new call starts, and stop when the user asks again for the same call (the newest following takes over, e.g. from a new chat). After the first, rounds are short: the new lines (only the last minute, at most 12 lines, when Claude fell behind, with any question to the user it skipped), the open briefing items every fourth round or with a question, the languages every tenth, and a reminder to be quick after a round over 20 s. The page sees how long Claude's last round took (`took`). A page out of touch for more than 2 minutes is waited for up to 5. The page sees the rounds (`follow` in `GET /api/<key>/suggestions`).
   - `show_suggestions`: up to 3 items, each `kind` (question, answer, point, warning), `say` (in the others' language) and `why` (in the user's); `remember`; `answered` ticks briefing items. The earlier ones are kept as `previous`. While following a call, Claude passes the same fields to `follow_call` instead: they are shown at once, then the round waits.
@@ -450,6 +473,14 @@ Tests:
 - `node bridge/test/mcp-client.mjs [url]` connects with the official MCP TypeScript SDK client: tools and prompts. Without a URL it runs the Worker in-process; with one it uses a running bridge, such as `npx wrangler dev`.
 - CI runs all of these, including `wrangler dev` with a local D1 database and deploy dry runs of both configurations.
 
+### Suggeritore (`prompter/`)
+
+An [Electron](https://www.electronjs.org) app (Electron is its only dependency, pinned). `main.js` opens one window that stays always on top (the `screen-saver` level, above full-screen windows). It calls `setContentProtection(true)`, which on Windows is `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`: Windows leaves the window out of screen sharing, recordings and screenshots. The window loads `<bridge>/?view=prompter`.
+- The first time, the local `pair.html` takes the prompter link. The app keeps the bridge's address in its data folder (`%APPDATA%\Suggeritore`); the key goes to the page in the address's fragment, and the page keeps it.
+- The window stays on the bridge's origin: other links open in the browser. The only permission it grants the page is writing to the clipboard. `preload.js` gives the pairing call to the local page only.
+- `start.js` starts it from a terminal without `ELECTRON_RUN_AS_NODE`, which VS Code sets for the programs it starts. The Desktop icon starts Electron directly.
+- The view it shows is tested in the browser (e2e); the Electron shell itself has no automatic tests.
+
 ### Run from source
 
 ```bash
@@ -469,7 +500,7 @@ This project was built in a cloud environment without a sound card, without Wind
 - **Reviewed, not executed**: the Windows-only code (installer, WASAPI capture, registry and shortcut code) was checked line by line against the PyAudioWPatch source and Windows PowerShell 5.1 rules.
 - **Needs a real Windows PC to verify**: live capture from your microphone and speakers, actual Whisper transcription quality/speed on your hardware, and the desktop shortcut. `Verifica installazione.bat` checks the first two quickly.
 - **Web app and bridge**:
-  - tested by unit tests, the official MCP client, 9 browser scenarios with a fake microphone, and the decoding with the real Whisper model (see above);
+  - tested by unit tests, the official MCP client, 10 browser scenarios with a fake microphone, and the decoding with the real Whisper model (see above);
   - in CI the bridge also runs on Cloudflare's local runtime (`wrangler dev`), alone and together with the app;
   - not covered by tests: claude.ai itself (adding the connector, where its prompts appear, how long a chat keeps following a call), a real call's acoustics (speakers, rooms, headsets: the echo detection is tested on a recording with simulated speakers and reverb), and the deploy on a real Cloudflare account.
 
@@ -483,6 +514,7 @@ This project is released under the [MIT License](LICENSE). It builds on open-sou
 - [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) (MIT, a PyAudio fork with WASAPI loopback) and [PortAudio](http://www.portaudio.com/) (MIT-style)
 - [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [NumPy](https://numpy.org) (BSD-3-Clause)
 - Web app design: the values of Microsoft's [Fluent UI](https://github.com/microsoft/fluentui) Teams themes (`@fluentui/tokens`, MIT) and a few [Fluent System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT). Microsoft Teams is a trademark of Microsoft; this project isn't affiliated with it.
+- Suggeritore: [Electron](https://github.com/electron/electron) (MIT, downloaded by `npm install`)
 - Web app: [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0, loaded from jsDelivr) running the [onnx-community Whisper](https://huggingface.co/onnx-community/whisper-base) models (MIT)
 - The microphone + speaker loopback design was inspired by [ecoute](https://github.com/SevaSk/ecoute) (MIT).
 

@@ -42,7 +42,7 @@ test("the page saves the call and Claude reads it through MCP", async () => {
 
   const id = "2026-10-27T09:00:00.000Z";
   const saved = await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "live", lang: "it", lines: lines(80) });
-  assert.deepEqual(saved.data, { ok: true, suggestions: null, meeting: null, follow: null });
+  assert.deepEqual(saved.data, { ok: true, suggestions: null, meeting: null, follow: null, prompter: false });
   assert.equal(saved.headers.get("access-control-allow-origin"), "*");
   assert.deepEqual((await b.call("GET", `/api/${KEY}/status`)).data, { ok: true, calls: 1 });
 
@@ -280,6 +280,38 @@ test("Claude shows suggestions in the page: saved for the current call, returned
   assert.equal((await b.call("GET", `/api/${OTHER}/suggestions`)).data.suggestions, null);
   await b.call("POST", `/api/${KEY}/delete`, "");
   assert.equal((await b.call("GET", `/api/${KEY}/suggestions`)).data.suggestions, null);
+});
+
+test("the prompter: the call in progress with Claude's suggestions and new lines; the page learns it is open", async (t) => {
+  const b = bridge();
+  // No call yet: the prompter waits, and its asking marks it open.
+  assert.deepEqual((await b.call("GET", `/api/${KEY}/prompter`)).data, { ok: true, call: null });
+  const id = "2026-10-27T09:00:00.000Z";
+  const page = await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "live", lang: "it", lines: lines(3) });
+  assert.equal(page.data.prompter, true);
+  assert.equal((await b.call("GET", `/api/${OTHER}/suggestions`)).data.prompter, false);
+
+  await b.tool("show_suggestions", { topic: "Milano", suggestions: [{ kind: "question", say: "Quando inizi?" }] });
+  const first = (await b.call("GET", `/api/${KEY}/prompter`)).data;
+  assert.deepEqual(first.call, { id, startedAt: id, updatedAt: first.call.updatedAt, lang: "it" });
+  assert.deepEqual(first.lines.map((l) => [l.n, l.text]), [[1, "frase 0"], [2, "frase 1"], [3, "frase 2"]]);
+  assert.equal(first.suggestions.topic, "Milano");
+  assert.deepEqual(first.suggestions.suggestions.map((x) => x.say), ["Quando inizi?"]);
+  assert.equal(first.follow, null);
+
+  // Only the lines after the last one it has.
+  await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "live", lang: "it", lines: lines(5) });
+  assert.deepEqual((await b.call("GET", `/api/${KEY}/prompter?after=3`)).data.lines.map((l) => l.text), ["frase 3", "frase 4"]);
+
+  // Closed for a while: the page shows everything again.
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 11_000 });
+  await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "live", lang: "it", lines: lines(6) });
+  const later = await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "live", lang: "it", lines: lines(7) });
+  assert.equal(later.data.prompter, false);
+  // The call ended: nothing in progress for the prompter.
+  await b.call("POST", `/api/${KEY}/call`, { id, startedAt: id, status: "ended", lang: "it", lines: lines(7) });
+  assert.deepEqual((await b.call("GET", `/api/${KEY}/prompter`)).data, { ok: true, call: null });
+  t.mock.timers.reset();
 });
 
 test("following the call: only the new lines, and a read that waits for them", async () => {

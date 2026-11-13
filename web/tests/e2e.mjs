@@ -426,6 +426,79 @@ await step("app served by its bridge: connected by itself, last step in the Call
   await context.close();
 });
 
+await step("the Suggeritore: paired with its link, it shows the call in progress, and the page keeps Claude's help off its screen", async () => {
+  const context = await newContext();
+  await routeBridge(context);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1200, height: 800 });
+  page.on("pageerror", (e) => errors.push(String(e)));
+  await page.goto("https://app.test/?engine=scripted&speed=25");
+  await claudeTitle(page, /^Ultimo passo/);
+  // Settings → Suggeritore: its link, with the bridge's key after "#".
+  await page.click('[data-tab="settings"]');
+  assert.ok(await page.isVisible("#prompter-card"));
+  await page.click("#prompter-copy");
+  const link = await clipboard(page);
+  const [, key] = /^https:\/\/app\.test\/\?view=prompter#k=([A-Za-z0-9_-]{32})$/.exec(link) || [];
+  assert.ok(key, link);
+  assert.match(await page.textContent("#prompter-status"), /^Link copiato/);
+
+  // The prompter elsewhere (its own window, a phone): the first time, it asks for the link.
+  const other = await newContext();
+  await routeBridge(other);
+  const prompter = await other.newPage();
+  prompter.on("pageerror", (e) => errors.push(String(e)));
+  await prompter.setViewportSize({ width: 420, height: 640 });
+  await prompter.goto("https://app.test/?view=prompter");
+  await prompter.waitForSelector("#prompter-pair:not(.hidden)");
+  assert.equal(await prompter.title(), "Suggeritore");
+  await prompter.fill("#prompter-link", "https://app.test/");
+  await prompter.click("#prompter-pair-go");
+  assert.match(await prompter.textContent("#prompter-pair-status"), /^Questo non è il link del Suggeritore/);
+  await prompter.fill("#prompter-link", link);
+  await prompter.press("#prompter-link", "Enter");
+  await prompter.waitForSelector("#live:not(.hidden)");
+  assert.equal(await prompter.textContent("#status"), "In attesa di una call");
+  assert.match(await prompter.textContent("#sug-topic"), /^Quando premi Avvia/);
+  assert.ok(await prompter.isHidden("#stop"));
+  assert.ok(await prompter.isHidden("#ask-claude"));
+
+  // A call starts: the prompter follows it, and the page shows only a note where Claude's help and the transcript were.
+  await page.click('[data-tab="call"]');
+  await page.click("#demo");
+  await prompter.waitForFunction(() => document.querySelector("#status").textContent === "Call in corso", null, { timeout: 15000 });
+  await prompter.waitForFunction(() => document.querySelectorAll("#transcript .line").length > 5, null, { timeout: 20000 });
+  assert.match(await prompter.textContent("#timer"), /^00:\d\d$/);
+  await page.waitForSelector("#prompter-note:not(.hidden)", { timeout: 15000 });
+  assert.ok(await page.isHidden("#live-body"));
+  assert.match(await page.textContent("#prompter-note-text"), /^Il Suggeritore è aperto/);
+  // Claude's suggestions reach the prompter.
+  const connector = `https://app.test/mcp/${key}`;
+  await mcp(connector, "tools/call", { name: "show_suggestions", arguments: { topic: "Il prezzo", suggestions: [{ kind: "answer", say: "Possiamo scendere del 5%.", why: "il budget è chiuso" }] } }, appEnv);
+  await prompter.waitForFunction(() => document.querySelectorAll("#suggestions .suggestion").length === 1, null, { timeout: 15000 });
+  assert.equal(await prompter.textContent("#sug-topic"), "Il prezzo");
+  assert.equal(await prompter.textContent("#suggestions .suggestion .text"), "Possiamo scendere del 5%.");
+  if (SHOTS) {
+    await prompter.waitForFunction(() => !document.getElementById("now").classList.contains("fresh"), null, { timeout: 5000 });
+    await prompter.screenshot({ path: join(SHOTS, "web-prompter.png") });
+    await page.evaluate(() => document.getElementById("notice").classList.add("hidden"));
+    await page.screenshot({ path: join(SHOTS, "web-prompter-page.png"), clip: { x: 0, y: 0, width: 1200, height: 300 } });
+  }
+  // Shown here too when asked, and hidden again.
+  await page.click("#prompter-show-here");
+  assert.ok(await page.isVisible("#live-body"));
+  assert.match(await page.textContent("#prompter-note-text"), /anche qui/);
+  await page.click("#prompter-show-here");
+  assert.ok(await page.isHidden("#live-body"));
+  // The call ends: the prompter keeps it, until the next one.
+  await page.click("#stop");
+  await page.waitForSelector("#ended:not(.hidden)", { timeout: 20000 });
+  await prompter.waitForFunction(() => document.querySelector("#status").textContent === "Call finita", null, { timeout: 15000 });
+  assert.equal(await prompter.textContent("#suggestions .suggestion .text"), "Possiamo scendere del 5%.");
+  await other.close();
+  await context.close();
+});
+
 await step("the bridge doesn't answer when the page opens: the call starts anyway, and Claude joins it when the bridge answers", async () => {
   const context = await newContext();
   const lateEnv = { DB: memoryD1(), ASSETS: appEnv.ASSETS };

@@ -3,7 +3,7 @@
 // claude.ai; without a bridge, «Ask Claude» copies the transcript for the chat.
 
 import { BrowserAudioCapture, CaptureError, captureSupported } from "./audio.js";
-import { Bridge, BridgeError, BridgeSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "./bridge.js";
+import { Bridge, BridgeError, BridgeSync, PrompterSync, cleanBridgeUrl, newBridgeKey, sameOriginBridge } from "./bridge.js";
 import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
 import { icon } from "./icons.js";
@@ -23,6 +23,8 @@ const TEST_ENGINE = params.get("engine");
 const UNSEEN_MS = Number(params.get("unseen")) || 60000;
 // ?slow=s (see renderFollow): Claude counts as slow when its rounds take this long.
 const SLOW_S = Number(params.get("slow")) || 30;
+// ?view=prompter: the Suggeritore, Claude's help for the call in progress and nothing else (see startPrompter).
+const PROMPTER = params.get("view") === "prompter";
 
 const SETTINGS_KEY = "ca.settings.v1";
 const DEFAULTS = {
@@ -35,6 +37,7 @@ const DEFAULTS = {
   bridgeOn: false,
   connectorAdded: false, // the user added the connector on claude.ai: the Call tab stops showing that step
   theme: "dark", // dark | light | auto (the system's)
+  prompterKey: "", // the bridge key from the Suggeritore's link (?view=prompter in another app or device)
 };
 const CLAUDE_NEW_CHAT = "https://claude.ai/new";
 
@@ -88,7 +91,7 @@ systemDark.addEventListener?.("change", applyTheme);
 
 function applyTranslations() {
   document.documentElement.lang = settings.uiLanguage;
-  document.title = t("app_title");
+  document.title = t(PROMPTER ? "prompter_title" : "app_title");
   document.querySelectorAll("[data-t]").forEach((el) => {
     el.textContent = t(el.dataset.t);
   });
@@ -213,6 +216,9 @@ function resetLive() {
   $("follow-state").dataset.text = "";
   script = new SuggestionScript();
   scriptFilter = "all";
+  prompterOn = false;
+  prompterHere = false;
+  renderPrompterNote();
   showMeeting(null);
   showSuggestions(null);
   showFollow(null);
@@ -303,6 +309,7 @@ function attachBridge() {
     onState: setBridgeState,
     onSuggestions: showSuggestions,
     onFollow: showFollow,
+    onPrompter: setPrompterOn,
     onMeeting: (m) => {
       showMeeting(m);
       // The meeting's names and terms help Whisper spell them right.
@@ -486,7 +493,8 @@ function renderFollow() {
   if (el.dataset.text !== text) {
     el.dataset.text = text;
     el.textContent = text;
-    if (unseen || slow) {
+    // The prompter only shows: the buttons are in the page.
+    if ((unseen || slow) && !PROMPTER) {
       const button = document.createElement("button");
       button.className = "plain";
       if (unseen) {
@@ -724,12 +732,21 @@ function markFresh(on) {
 }
 
 function setBadge(on) {
-  const title = on ? `${t("title_new")} · ${t("app_title")}` : t("app_title");
+  const name = t(PROMPTER ? "prompter_title" : "app_title");
+  const title = on ? `${t("title_new")} · ${name}` : name;
   document.title = title;
   if (pipWindow) pipWindow.document.title = title;
 }
 
 function tick() {
+  if (PROMPTER) {
+    renderPrompterTimer();
+    if (prompterState === "live") {
+      renderFollow();
+      renderSugTime();
+    }
+    return;
+  }
   if (!session || !session.running || session.stopping) return;
   $("timer").textContent = fmtTime(session.elapsed());
   if (bridgeSync) {
@@ -786,6 +803,7 @@ async function openPip() {
   }
   pipWindow.document.title = t("app_title");
   pipWindow.document.body.classList.add("pip");
+  renderPrompterNote();
   applyTheme();
   const placeholder = document.createComment("live panel is in the always-on-top window");
   live.before(placeholder);
@@ -967,6 +985,8 @@ function renderBridge(note = "") {
   show($("bridge-off"), bridgeActive());
   show($("project-box"), bridgeActive());
   $("project-status").textContent = "";
+  show($("prompter-card"), bridgeActive());
+  $("prompter-status").textContent = "";
   $("bridge-status").textContent = note || (bridgeHere ? bridgeProblem : "");
 }
 
@@ -982,6 +1002,135 @@ function setBridgeState(state) {
   }
   show(el, Boolean(state));
   if (state === "error") setNotice($("notice"), t("bridge_down"), "warn");
+}
+
+// --------------------------------------------------------------- prompter
+// The Suggeritore: Claude's help for the call in progress in a window the
+// screen share doesn't show (prompter/, a small Electron app), or on a phone.
+// It is this page at ?view=prompter, reading the call from the bridge. While
+// one is open, the page keeps the suggestions and the transcript off its own
+// screen, which may be the one shared.
+
+let prompterOn = false; // the bridge says a prompter shows this call
+let prompterHere = false; // the user asked to see them here too
+let prompterSync = null;
+let prompterCall = null; // the call the prompter shows; kept after it ends, until the next one
+let prompterState = null; // live | waiting | error
+
+function setPrompterOn(on) {
+  if (on === prompterOn) return;
+  prompterOn = on;
+  if (!on) prompterHere = false;
+  renderPrompterNote();
+}
+
+function renderPrompterNote() {
+  const hide = prompterOn && !prompterHere;
+  for (const doc of [document, pipWindow && pipWindow.document]) if (doc) doc.body.classList.toggle("prompter-on", hide);
+  show($("prompter-note"), prompterOn && !PROMPTER);
+  $("prompter-note-text").textContent = t(prompterHere ? "prompter_note_here" : "prompter_note_on");
+  $("prompter-show-here").textContent = t(prompterHere ? "prompter_hide_here" : "prompter_show_here");
+}
+
+/** The prompter's link: the bridge's page with the key after "#", which the browser never sends anywhere. */
+function prompterLink() {
+  return `${settings.bridgeUrl}/?view=prompter#k=${settings.bridgeKey}`;
+}
+
+/** The key in a prompter link (or the key alone, pasted); null when there is none. */
+function keyFromLink(text) {
+  const value = String(text || "").trim();
+  const m = /[#&?]k=([A-Za-z0-9_-]{24,128})(?:[&#]|$)/.exec(value) || /^([A-Za-z0-9_-]{24,128})$/.exec(value);
+  return m ? m[1] : null;
+}
+
+function startPrompter() {
+  document.body.classList.add("prompter-view");
+  show($("setup"), false);
+  // Opened from its link: keep the key, and take it out of the address.
+  const fromLink = keyFromLink(location.hash);
+  if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+  if (fromLink) {
+    settings = { ...settings, prompterKey: fromLink };
+    saveSettings();
+  }
+  // In the browser where Call Assistant runs, its own key does.
+  const key = settings.prompterKey || settings.bridgeKey;
+  if (key) runPrompter(key);
+  else showPairing();
+}
+
+function showPairing(note = "") {
+  show($("live"), false);
+  show($("prompter-pair"), true);
+  $("prompter-pair-status").textContent = note;
+  $("prompter-link").focus();
+}
+
+async function pairPrompter() {
+  const key = keyFromLink($("prompter-link").value);
+  if (!key) {
+    $("prompter-pair-status").textContent = t("prompter_pair_bad");
+    return;
+  }
+  $("prompter-pair-status").textContent = t("prompter_pair_checking");
+  try {
+    await new Bridge({ url: location.origin, key }).status();
+  } catch (err) {
+    $("prompter-pair-status").textContent = bridgeMessage(err);
+    return;
+  }
+  settings = { ...settings, prompterKey: key };
+  saveSettings();
+  $("prompter-link").value = "";
+  show($("prompter-pair"), false);
+  runPrompter(key);
+}
+
+function runPrompter(key) {
+  // The live panel's helpers read the bridge from the settings: this one, for this visit (not saved).
+  settings = { ...settings, bridgeOn: true, bridgeUrl: location.origin, bridgeKey: key };
+  show($("live"), true);
+  document.body.classList.add("in-call");
+  resetLive();
+  showPrompterState("waiting");
+  if (prompterSync) prompterSync.stop();
+  prompterSync = new PrompterSync({
+    bridge: new Bridge({ url: location.origin, key }),
+    onState: showPrompterState,
+    onCall: (call) => {
+      resetLive();
+      prompterCall = call;
+    },
+    onLines: (lines) => lines.forEach(addTranscriptLine),
+    onSuggestions: showSuggestions,
+    onMeeting: showMeeting,
+    onFollow: showFollow,
+  });
+  prompterSync.start();
+}
+
+function showPrompterState(state) {
+  prompterState = state;
+  const [key, cls] = {
+    live: ["prompter_live", "ok"],
+    error: ["prompter_error", "error"],
+  }[state] || [prompterCall ? "prompter_ended" : "prompter_waiting", ""];
+  $("status").textContent = t(key);
+  $("status-dot").className = `dot ${cls}`;
+  if (state === "waiting" && !prompterCall) {
+    $("sug-topic").textContent = t("prompter_waiting_text");
+    $("sug-topic").className = "topic waiting";
+  }
+  renderPrompterTimer();
+}
+
+/** How long the call has been going, from when the page started it. */
+function renderPrompterTimer() {
+  const start = prompterCall ? Date.parse(prompterCall.startedAt) : NaN;
+  const on = prompterState === "live" && Number.isFinite(start);
+  show($("timer"), on);
+  if (on) $("timer").textContent = fmtTime((Date.now() - start) / 1000);
 }
 
 // --------------------------------------------------------------- history
@@ -1134,6 +1283,17 @@ function wire() {
   $("project-copy").addEventListener("click", async (e) => {
     if (await copyText(projectInstructions(settings.uiLanguage), e.view || window)) $("project-status").textContent = t("project_copied");
   });
+  $("prompter-copy").addEventListener("click", async (e) => {
+    if (await copyText(prompterLink(), e.view || window)) $("prompter-status").textContent = t("prompter_copied");
+  });
+  $("prompter-show-here").addEventListener("click", () => {
+    prompterHere = !prompterHere;
+    renderPrompterNote();
+  });
+  $("prompter-pair-go").addEventListener("click", pairPrompter);
+  $("prompter-link").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") pairPrompter();
+  });
   $("bridge-copy").addEventListener("click", async (e) => {
     if (await copyText($("bridge-connector").value, e.view || window)) $("bridge-status").textContent = t("copied");
   });
@@ -1220,13 +1380,17 @@ document.querySelectorAll("[data-icon]").forEach((el) => {
 });
 applyTranslations();
 wire();
-renderSetup();
-renderClaudeBox(!bridgeActive());
-connectHere();
-// Arrived from a copy of the page at another address: this is the one that goes with Claude's connector.
-if (location.hash === "#moved") {
-  setNotice($("setup-notice"), t("moved_here", { host: location.host }), "ok");
-  history.replaceState(null, "", location.pathname + location.search);
+if (PROMPTER) {
+  startPrompter();
+} else {
+  renderSetup();
+  renderClaudeBox(!bridgeActive());
+  connectHere();
+  // Arrived from a copy of the page at another address: this is the one that goes with Claude's connector.
+  if (location.hash === "#moved") {
+    setNotice($("setup-notice"), t("moved_here", { host: location.host }), "ok");
+    history.replaceState(null, "", location.pathname + location.search);
+  }
 }
 
 // The bar's soft edge shows only once content scrolls under it.
