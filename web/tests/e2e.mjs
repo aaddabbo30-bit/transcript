@@ -21,7 +21,7 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 const ROOT = fileURLToPath(new URL("../", import.meta.url)); // web/
 const FAKE_MIC = process.argv[2] || fileURLToPath(new URL("../../tests/fixtures/speech_it_en.wav", import.meta.url));
 const SHOTS = process.argv[3] || null;
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".txt": "text/plain" };
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".png": "image/png", ".txt": "text/plain", ".svg": "image/svg+xml", ".webmanifest": "application/manifest+json" };
 
 const served = []; // every URL the page asked our server for
 
@@ -437,8 +437,14 @@ await step("the Suggeritore: paired with its link, it shows the call in progress
   // Settings → Suggeritore: its link, with the bridge's key after "#".
   await page.click('[data-tab="settings"]');
   assert.ok(await page.isVisible("#prompter-card"));
+  // The prompter link is also a QR code, so the phone pairs by pointing its camera.
+  await page.waitForSelector("#prompter-qr svg path");
+  assert.ok((await page.getAttribute("#prompter-qr svg path", "d")).length > 100, "the QR has modules");
   await page.click("#prompter-copy");
   const link = await clipboard(page);
+  // The QR encodes exactly that link (same key).
+  assert.equal(await page.getAttribute("#prompter-qr", "data-link"), link);
+  if (SHOTS) await page.locator("#prompter-card").screenshot({ path: join(SHOTS, "web-prompter-settings.png") });
   const [, key] = /^https:\/\/app\.test\/\?view=prompter#k=([A-Za-z0-9_-]{32})$/.exec(link) || [];
   assert.ok(key, link);
   assert.match(await page.textContent("#prompter-status"), /^Link copiato/);
@@ -693,6 +699,23 @@ await step("every script and the Whisper worker load with the version stamp of i
   // The worker's own import too: workers don't see the page's import map.
   assert.equal(scripts.filter((url) => url.startsWith("/js/model-files.js")).length, 2, scripts.join(" "));
   for (const url of scripts) assert.ok(url.endsWith(`?v=${version}`), `${url} has no ?v=${version}`);
+  await page.context().close();
+});
+
+await step("installable as a desktop app: a web manifest with the app's name and icons", async () => {
+  const page = await newPage("?engine=scripted");
+  const href = await page.getAttribute('link[rel="manifest"]', "href");
+  assert.equal(href, "manifest.webmanifest");
+  const m = await page.evaluate(async (u) => (await fetch(u)).json(), href);
+  assert.equal(m.name, "Assistente chiamate");
+  assert.equal(m.display, "standalone");
+  assert.ok(m.icons.some((i) => i.sizes === "512x512" && i.type === "image/png"), "a 512 png icon");
+  assert.ok(m.icons.some((i) => i.purpose === "maskable"), "a maskable icon");
+  // The icons the manifest points to are served.
+  for (const icon of m.icons) {
+    const ok = await page.evaluate(async (src) => (await fetch(src)).ok, icon.src);
+    assert.ok(ok, `${icon.src} is served`);
+  }
   await page.context().close();
 });
 

@@ -17,6 +17,7 @@ A personal assistant for your calls and videos, in the spirit of Proactor.ai but
 
 0. [Web app with Claude](#0-web-app-with-claude) (recommended)
    - [Set it up (once)](#set-it-up-once)
+   - [Install it as a desktop app](#install-it-as-a-desktop-app)
    - [Use it during a call](#use-it-during-a-call)
    - [Meeting briefing](#meeting-briefing)
    - [The Suggeritore: a window the screen share doesn't show](#the-suggeritore-a-window-the-screen-share-doesnt-show)
@@ -63,6 +64,15 @@ You need:
    3. Back in the app, press **Done**. The Call tab now says *Claude is connected*.
 
 The connector address contains a secret key made by the page and kept in that browser. If you open the app in another browser, or press **Change secret address**, it shows a new address: update the connector on claude.ai with it.
+
+### Install it as a desktop app
+
+The app can be installed on the PC so it opens like a program, in its own window with no browser tabs or address bar, and from the Start menu or the taskbar. It stays the same browser engine (so the microphone, the shared-tab audio and the transcription work exactly as before, and nothing touches the call's own audio): it is an installed web app, so there is nothing for a locked-down work PC to block.
+
+- **Microsoft Edge:** open the app, then **… (Settings and more) → Apps → Install Assistente chiamate** (or **Install this site as an app**). Choose to pin it to the taskbar and Start.
+- **Google Chrome:** open the app, then the **install icon** in the address bar (or **⋮ → Cast, save and share → Install page as app**).
+
+The installed window has the leaf icon and the name *Assistente chiamate*. Use it as usual: press **Start**, and during the call **In primo piano / On top** opens a small always-on-top window you can keep beside Teams. (That window is part of the browser, so a full-screen share still shows it; to keep Claude's help out of the share you need either the [Suggeritore](#the-suggeritore-a-window-the-screen-share-doesnt-show) on a PC that allows it, or a phone.)
 
 ### Use it during a call
 
@@ -134,6 +144,10 @@ While the Suggeritore is open, the page in the browser keeps the suggestions and
 4. The first time, it asks for its link. In the web app, go to **Settings → Suggeritore**, press **Copia il link del Suggeritore / Copy the prompter link**, then paste it in the window and press **Collega / Connect**. The link holds your bridge's key, like the connector address: keep it private.
 
 Company PCs often block programs and libraries started from your user folder (group policy, AppLocker). Then `npm start` stops with *This program is blocked by group policy*: that is your IT's rule, and only they can allow it. Use the Suggeritore on your phone instead (below).
+
+**On a phone instead (no install, and nothing to run on the PC).** The same view runs on a phone, which is never in your PC's screen share. In the web app go to **Settings → Suggeritore** and point the phone's camera at the **QR code** (or press **Copia il link del Suggeritore** and open the link on the phone): the page opens already connected. Add it to the Home screen to use it like an app. During a call, open it on the phone with Call Assistant running on the PC: the page on the PC then hides Claude's column and the transcript, so the screen share shows nothing even if you share the whole screen. This is the way to use it on a locked-down work PC where the window above can't be installed.
+
+<img src="docs/web-prompter-settings.png" width="520" alt="Settings → Suggeritore: a Copy-link button and a QR code to open the prompter on a phone">
 
 **Use it.** Start the call in the browser as usual, then the Suggeritore. Click a suggestion to copy it. Right-click in the window to reload it, change the text size, connect it again or quit; Ctrl + and Ctrl − change the text size too. The same link opened on a phone shows the same view, and a phone is never in your PC's screen share.
 
@@ -430,7 +444,8 @@ The web app needs no build step: plain ES modules, served as static files. It ne
 - `js/script.js`: the call's script: every suggestion Claude sent, without repeats, grouped by arrival, with filters and pins; saved with the call in the history.
 - `js/prompts.js`: the requests that *Ask Claude* copies for a claude.ai chat.
 - `js/history.js`: past calls, in the browser's local storage.
-- `?view=prompter`: the same page as the Suggeritore's view. It shows only the live panel, fed by `PrompterSync` (`js/bridge.js`) from the bridge's prompter endpoint, with no session or audio of its own. The key comes from the link's fragment (`#k=…`, which never reaches a server) and is kept in that browser's storage; in the browser where the app runs, the app's own key is used.
+- `manifest.webmanifest` and `assets/icon-192/512/maskable.png`: the app installs as a PWA (Edge/Chrome "Install as an app"), opening in its own `standalone` window. No service worker: the stamp already busts the cache, and the app must always load the current scripts.
+- `?view=prompter`: the same page as the Suggeritore's view. It shows only the live panel, fed by `PrompterSync` (`js/bridge.js`) from the bridge's prompter endpoint, with no session or audio of its own. The key comes from the link's fragment (`#k=…`, which never reaches a server) and is kept in that browser's storage; in the browser where the app runs, the app's own key is used. **Settings → Suggeritore** also shows that link as a QR code, drawn as an inline SVG from `vendor/qrcode.mjs` (loaded only when the card is shown), so a phone pairs by camera.
 
 After changing anything in `js/` or `css/`, run `node web/tools/stamp.mjs`. It writes a hash of those files into `index.html` (`?v=…` links plus an import map), so browsers fetch a new version as a whole instead of mixing new and cached files. CI fails when the stamp is out of date.
 
@@ -516,7 +531,7 @@ This project is released under the [MIT License](LICENSE). It builds on open-sou
 - [PyAudioWPatch](https://github.com/s0d3s/PyAudioWPatch) (MIT, a PyAudio fork with WASAPI loopback) and [PortAudio](http://www.portaudio.com/) (MIT-style)
 - [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) (Apache-2.0), [NumPy](https://numpy.org) (BSD-3-Clause)
 - Web app design: the values of Microsoft's [Fluent UI](https://github.com/microsoft/fluentui) Teams themes (`@fluentui/tokens`, MIT) and a few [Fluent System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT). Microsoft Teams is a trademark of Microsoft; this project isn't affiliated with it.
-- Suggeritore: [Electron](https://github.com/electron/electron) (MIT, downloaded by `npm install`)
+- Suggeritore: [Electron](https://github.com/electron/electron) (MIT, downloaded by `npm install`); the pairing QR uses [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT, vendored in `web/vendor/`)
 - Web app: [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0, loaded from jsDelivr) running the [onnx-community Whisper](https://huggingface.co/onnx-community/whisper-base) models (MIT)
 - The microphone + speaker loopback design was inspired by [ecoute](https://github.com/SevaSk/ecoute) (MIT).
 

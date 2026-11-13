@@ -18,6 +18,8 @@ links below.
 | Python, Tcl/Tk | runtime and window toolkit | PSF License, Tcl/Tk license (BSD-style) |
 | [Transformers.js](https://github.com/huggingface/transformers.js) 4.3.1 | Whisper in the browser (web app), loaded from jsDelivr | Apache-2.0 |
 | [onnx-community/whisper-base / whisper-small](https://huggingface.co/onnx-community/whisper-base) | Whisper models for the web app, downloaded by the browser | MIT |
+| [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) 2.0.4 | the Suggeritore pairing QR in Settings (web app), vendored in `web/vendor/` | MIT |
+| [Electron](https://github.com/electron/electron) 45.3.1 | the Suggeritore desktop window (`prompter/`), downloaded by `npm install` | MIT |
 
 Design inspiration (no code copied): [ecoute](https://github.com/SevaSk/ecoute)
 (MIT) records the microphone and the speaker loopback in parallel and suggests
