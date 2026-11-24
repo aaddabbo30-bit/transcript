@@ -144,6 +144,31 @@ test("demo session: the transcript plays back, Stop ends the call with it", asyn
   assert.equal(await s.stop(), result); // a second Stop changes nothing
 });
 
+test("the transcription skips the backlog to stay live when the computer can't keep up", () => {
+  const events = [];
+  let now = 0;
+  const s = new CallSession({ settings: SETTINGS, transcriber: new ScriptedTranscriber([], 1), onEvent: (k, p) => events.push([k, p]), clock: () => now });
+  s.t0 = 0;
+  // 0..129 s of waiting utterances, Whisper stuck: nothing processed.
+  for (let t = 0; t < 130; t += 5) s.queue.push({ source: "them", start: t, end: t + 4, audio: new Float32Array(1) });
+  now = 130;
+  s.skipBacklog();
+  // Only the last ~12 s are kept; the rest is dropped so it jumps back to the present.
+  const newest = s.queue[s.queue.length - 1];
+  assert.ok(s.queue.every((c) => c === newest || c.end >= now - 12), "only recent utterances kept");
+  assert.ok(s.queue.length <= 4, `${s.queue.length} kept`);
+  assert.ok(s.stats.skipped >= 20, `${s.stats.skipped} skipped`);
+  assert.ok(s.stats.skippedS > 90, `${s.stats.skippedS} s skipped`);
+  assert.ok(events.some(([k, p]) => k === "warning" && Array.isArray(p) && p[0] === "skipped"), "told the user once");
+  // Still slow later: it keeps skipping but doesn't nag again.
+  const before = events.length;
+  for (let t = 135; t < 180; t += 5) s.queue.push({ source: "them", start: t, end: t + 4, audio: new Float32Array(1) });
+  now = 180;
+  s.skipBacklog();
+  assert.ok(s.stats.skipped > 20);
+  assert.ok(!events.slice(before).some(([k]) => k === "warning"), "no second toast");
+});
+
 test("audio session: segmenter + (scripted) Whisper, and a warning when the call audio is silent", async () => {
   const events = [];
   const audio = readWav16k(new URL("tests/fixtures/speech_it_en.wav", ROOT));
@@ -477,7 +502,7 @@ test("Whisper's queue: joins one speaker's waiting sentences, never across the o
   let now = 0;
   const s = new CallSession({ settings: SETTINGS, transcriber, onEvent: (k, p) => events.push([k, p]), clock: () => now });
   await s.start();
-  now = 100;
+  now = 30; // behind, but under the skip-to-live threshold, so the backlog still batches
   s.setGlossary(["Jaromir", "X-13"]);
   const chunk = (source, start) => ({ source, start, end: start + 1, audio: new Float32Array(16000) });
   // Whisper busy with the first; meanwhile: them, them, me, them.
@@ -488,10 +513,10 @@ test("Whisper's queue: joins one speaker's waiting sentences, never across the o
   s.transcribe(chunk("them", 8));
   s.tick();
   await s.stop();
-  // While Whisper worked on the first, four waited; the oldest ended 97 s before "now".
+  // While Whisper worked on the first, four waited; the oldest ended 27 s before "now".
   const health = events.filter(([k]) => k === "health")[0][1];
   assert.equal(health.waiting, 4);
-  assert.equal(health.lag, 97);
+  assert.equal(health.lag, 27);
   // 1: them@0 alone; 2: them@2+4 joined; 3: me@6; 4: them@8 (the user spoke in between: not joined).
   assert.deepEqual(transcriber.calls.map((c) => Math.round(c.seconds * 100) / 100), [1, 2.25, 1, 1]);
   assert.deepEqual(s.store.lines.map((l) => [l.t, l.speaker, l.text]), [[0, "them", "Uno."], [2, "them", "Due."], [6, "me", "Tre."], [8, "them", "Quattro."]]);
