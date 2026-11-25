@@ -114,8 +114,10 @@ Prepare the meeting in a Claude chat as you like: objectives, questions to ask, 
 **A briefing belongs to one call.** Every call starts without one, and a briefing can only be saved while its call is running: nothing saved before **Start** or after the end waits for the next call. A new call never shows the last call's briefing, questions or suggestions. From a new chat, Claude simply follows the call from what is said. The briefing is deleted with its call (48 hours at most); **Delete the calls from the bridge** removes it too.
 
 The first time, the Whisper model downloads (about 150 MB for `base`), and the browser keeps it for next time. Some company networks let downloads from Hugging Face through only after a security check in a browser tab; then the page can't download the model by itself. In that case use **Settings → Load the model by hand**:
-- click the 7 links, one at a time, so each file downloads in a tab and passes the check: the two large `.onnx` files and five small `.json` files;
-- press **Choose the downloaded files** and pick all 7.
+- click the links, one at a time, so each file downloads in a tab and passes the check: the two large `.onnx` files and five small `.json` files;
+- press **Choose the downloaded files** and pick them all.
+
+**Use the graphics card (GPU) too.** When the browser offers a GPU (WebGPU), Settings says so and lists two more files marked **GPU** (a full-precision encoder and a 4-bit decoder). Load them the same way: from the next call the transcription runs on the graphics card, much faster than on the processor and lighter on the rest of the PC (Teams included). Without them, a model loaded by hand runs on the processor. **Settings → Transcription** also shows where the last call ran and how fast (*model base on GPU, 0.4 s per block of speech*).
 
 They are stored in that browser's cache, so the app finds them there. The status under the button lists what is still missing. Each address (your Worker, GitHub Pages) has its own cache, so load them where you use the app.
 
@@ -123,7 +125,7 @@ They are stored in that browser's cache, so the app finds them there. The status
 
 **How quickly things appear.** The live panel shows how long after the end of each sentence its text appeared (*text 2.1 s after speech*), or how far behind the transcript is when it catches up. What adds up:
 - **The end of the sentence.** A sentence is transcribed when it ends: after a 0.5 s pause, or after 8 s of continuous speech, cut at a quiet point.
-- **Whisper on your computer.** Whisper always works on a 30 s window, however short the sentence: one window takes about as long for "Okay" as for a long sentence. When the model loads, the page measures it and shows it (*1.4 s per block of speech*). While Whisper is busy, the sentences that arrive wait and are then transcribed together in one window (one speaker at a time, never across the other speaker). If the computer still can't keep up and the text falls more than ~45 seconds behind, the page **skips the oldest waiting audio and jumps back to the present** (losing a few sentences, not the moment), so the suggestions stay current instead of lagging minutes behind; it says so once. Served by your Worker, the page is *cross-origin isolated* (`web/_headers`), so Whisper runs on up to 4 CPU threads instead of 1; on GitHub Pages it runs on one, more slowly. For the fewest skips on a slow PC, pick the **base** model, use headphones and close heavy apps.
+- **Whisper on your computer.** Whisper always works on a 30 s window, however short the sentence: one window takes about as long for "Okay" as for a long sentence. When the model loads, the page measures it and shows it (*1.4 s per block of speech*). While Whisper is busy, the sentences that arrive wait and are then transcribed together in one window (one speaker at a time, never across the other speaker). If the computer still can't keep up and the text falls more than ~45 seconds behind, the page **skips the oldest waiting audio and jumps back to the present** (losing a few sentences, not the moment), so the suggestions stay current instead of lagging minutes behind; it says so once. Behind, the others' speech goes first, and more of it is kept than of yours: what they ask is what the prompter must catch. The page leaves the processor's thread count at its default so Teams keeps enough of it for the call's audio. Served by your Worker, the page is *cross-origin isolated* (`web/_headers`), so Whisper runs on up to 4 CPU threads instead of 1; on GitHub Pages it runs on one, more slowly. For the fewest skips on a slow PC, pick the **base** model, use headphones and close heavy apps.
 - **To Claude.** Each new line reaches the bridge at once. A round of Claude ends as soon as the others ask you a question, or after a few new lines or seconds; its suggestions reach the page within about 2.5 s. Then it depends on how long Claude takes to answer: a model without extended thinking answers sooner.
 
 ### The Suggeritore: a window the screen share doesn't show
@@ -157,7 +159,7 @@ Company PCs often block programs and libraries started from your user folder (gr
 - **Language.** *Auto* chooses between Italian and English for each sentence, leaning towards the language that speaker has been speaking. If the whole call is in one language, choose it: Whisper is a little more accurate.
 - **Silence and noise.** Whisper invents short sentences on silence ("Thank you.", "Grazie."). The page asks Whisper how sure it is that there was speech at all, and how sure it is of the words: what it doubts, and sounds like "uh" or "mm", are dropped.
 - **Names and acronyms.** Put them in the briefing's glossary (Claude does it from the chat): Whisper gets them as a hint.
-- **Model.** `base` is fast; `small` is clearly more accurate, slower. When `base` is fast on your computer, the page suggests `small`. If you load the model by hand, `small` needs its own 7 files.
+- **Model.** `base` is fast; `small` is clearly more accurate, slower. When `base` is fast on your computer, the page suggests `small`. If you load the model by hand, `small` needs its own files.
 
 ### Other ways to set it up
 
@@ -452,7 +454,7 @@ After changing anything in `js/` or `css/`, run `node web/tools/stamp.mjs`. It w
 Run it locally with any static server, for example `python -m http.server -d web`, then open <http://localhost:8000>; `localhost` counts as secure for the microphone. With the bridge too: `npx wrangler dev` at the root of the repository serves both, with a local database.
 
 Tests:
-- `node --test web/tests/unit.test.mjs` runs 26 unit tests: segmentation and echo detection on a real recording (echo alone, the user alone, both talking at once), the decoding steps, the filters, Whisper's queue, full simulated calls, the chat requests, the bridge client, its suggestions and Claude's follow state.
+- `node --test web/tests/unit.test.mjs` runs 28 unit tests: segmentation and echo detection on a real recording (echo alone, the user alone, both talking at once), the decoding steps, the filters, Whisper's queue (the others first when behind, and skipping the backlog to stay current), full simulated calls, the chat requests, the bridge client, its suggestions and Claude's follow state.
 - `node web/tests/whisper-real.mjs` runs the decoding with the real `whisper-base` (Transformers.js on Node, downloaded from Hugging Face): Italian and English told apart, the same words as the plain pipeline, silence and noise dropped, the glossary prompt not echoed. CI runs it in its own job.
 - `node web/tests/e2e.mjs` runs Chromium with a fake microphone playing a speech recording. It covers:
   - the Suggeritore's view: paired with the link from Settings (a wrong link refused), it waits for a call, then shows the call in progress, its transcript and Claude's suggestions, and keeps the call after it ends; meanwhile the page hides Claude's column and the transcript, and shows them again when asked;
@@ -461,7 +463,7 @@ Tests:
   - a copy of the page at another address going to the page of its bridge, when the bridge serves the page;
   - a bridge at another address, connected in Settings, and the page saying so when no round of Claude reaches the call;
   - *Ask Claude* without a bridge, the microphone's meter moving with the voice, the end of a call, the history and the transcript download;
-  - the always-on-top window, the model loaded by hand, and the version stamp of every script, including the Whisper worker.
+  - the always-on-top window, the model loaded by hand (with a GPU in the browser, its two extra files and where the last call ran), the web manifest that makes the app installable, and the version stamp of every script, including the Whisper worker.
 
   It needs `playwright`.
 
@@ -517,7 +519,7 @@ This project was built in a cloud environment without a sound card, without Wind
 - **Reviewed, not executed**: the Windows-only code (installer, WASAPI capture, registry and shortcut code) was checked line by line against the PyAudioWPatch source and Windows PowerShell 5.1 rules.
 - **Needs a real Windows PC to verify**: live capture from your microphone and speakers, actual Whisper transcription quality/speed on your hardware, and the desktop shortcut. `Verifica installazione.bat` checks the first two quickly.
 - **Web app and bridge**:
-  - tested by unit tests, the official MCP client, 10 browser scenarios with a fake microphone, and the decoding with the real Whisper model (see above);
+  - tested by unit tests, the official MCP client, 12 browser scenarios with a fake microphone, and the decoding with the real Whisper model (see above);
   - in CI the bridge also runs on Cloudflare's local runtime (`wrangler dev`), alone and together with the app;
   - not covered by tests: claude.ai itself (adding the connector, where its prompts appear, how long a chat keeps following a call), a real call's acoustics (speakers, rooms, headsets: the echo detection is tested on a recording with simulated speakers and reverb), and the deploy on a real Cloudflare account.
 

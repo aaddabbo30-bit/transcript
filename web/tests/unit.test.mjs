@@ -149,16 +149,17 @@ test("the transcription skips the backlog to stay live when the computer can't k
   let now = 0;
   const s = new CallSession({ settings: SETTINGS, transcriber: new ScriptedTranscriber([], 1), onEvent: (k, p) => events.push([k, p]), clock: () => now });
   s.t0 = 0;
-  // 0..129 s of waiting utterances, Whisper stuck: nothing processed.
-  for (let t = 0; t < 130; t += 5) s.queue.push({ source: "them", start: t, end: t + 4, audio: new Float32Array(1) });
+  // 0..129 s of waiting utterances, the others and the user in turn, Whisper stuck: nothing processed.
+  for (let t = 0; t < 130; t += 5) s.queue.push({ source: t % 10 ? "me" : "them", start: t, end: t + 4, audio: new Float32Array(1) });
   now = 130;
   s.skipBacklog();
-  // Only the last ~12 s are kept; the rest is dropped so it jumps back to the present.
-  const newest = s.queue[s.queue.length - 1];
-  assert.ok(s.queue.every((c) => c === newest || c.end >= now - 12), "only recent utterances kept");
+  // It jumps back to the present, keeping more of the others' speech (20 s) than of the user's (6 s).
+  const newest = s.queue.reduce((a, c) => (c.end > a.end ? c : a));
+  assert.ok(s.queue.filter((c) => c.source === "them").every((c) => c.end >= now - 20), "the others' last 20 s");
+  assert.ok(s.queue.filter((c) => c.source === "me" && c !== newest).every((c) => c.end >= now - 6), "the user's last 6 s");
   assert.ok(s.queue.length <= 4, `${s.queue.length} kept`);
   assert.ok(s.stats.skipped >= 20, `${s.stats.skipped} skipped`);
-  assert.ok(s.stats.skippedS > 90, `${s.stats.skippedS} s skipped`);
+  assert.ok(s.stats.skippedS > 80, `${s.stats.skippedS} s skipped`);
   assert.ok(events.some(([k, p]) => k === "warning" && Array.isArray(p) && p[0] === "skipped"), "told the user once");
   // Still slow later: it keeps skipping but doesn't nag again.
   const before = events.length;
@@ -167,6 +168,20 @@ test("the transcription skips the backlog to stay live when the computer can't k
   s.skipBacklog();
   assert.ok(s.stats.skipped > 20);
   assert.ok(!events.slice(before).some(([k]) => k === "warning"), "no second toast");
+});
+
+test("behind, Whisper takes the others' speech first; on time, the oldest first", () => {
+  let now = 0;
+  const s = new CallSession({ settings: SETTINGS, transcriber: new ScriptedTranscriber([], 1), clock: () => now });
+  s.t0 = 0;
+  const chunk = (source, start) => ({ source, start, end: start + 2, audio: new Float32Array(1) });
+  s.queue.push(chunk("me", 0), chunk("them", 4));
+  s.lag = 5; // on time
+  assert.equal(s.nextBatch()[0].source, "me");
+  s.queue.push(chunk("me", 10), chunk("them", 14));
+  s.lag = 35; // behind
+  assert.equal(s.nextBatch()[0].source, "them");
+  assert.equal(s.nextBatch()[0].source, "me");
 });
 
 test("audio session: segmenter + (scripted) Whisper, and a warning when the call audio is silent", async () => {

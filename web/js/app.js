@@ -7,7 +7,7 @@ import { Bridge, BridgeError, BridgeSync, PrompterSync, cleanBridgeUrl, newBridg
 import { callLabel, deleteCall, download, fileName, loadCalls, saveCall, transcriptMarkdown } from "./history.js";
 import { translator } from "./i18n.js";
 import { icon } from "./icons.js";
-import { ModelFileError, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
+import { GPU_FILES, ModelFileError, hasWebGpu, importModelFiles, manualDownloadLinks, missingManualFiles } from "./model-files.js";
 import { chatAskPrompt, chatConnectorPrompt, chatSummaryPrompt, projectInstructions } from "./prompts.js";
 import { Banner } from "./motion.js";
 import { KINDS, SuggestionScript } from "./script.js";
@@ -23,6 +23,8 @@ const TEST_ENGINE = params.get("engine");
 const UNSEEN_MS = Number(params.get("unseen")) || 60000;
 // ?slow=s (see renderFollow): Claude counts as slow when its rounds take this long.
 const SLOW_S = Number(params.get("slow")) || 30;
+// ?gpu=1 / ?gpu=0: pretend this browser has (or hasn't) a GPU, for the Settings it changes (tests).
+const TEST_GPU = params.get("gpu");
 // ?view=prompter: the Suggeritore, Claude's help for the call in progress and nothing else (see startPrompter).
 const PROMPTER = params.get("view") === "prompter";
 
@@ -38,6 +40,7 @@ const DEFAULTS = {
   connectorAdded: false, // the user added the connector on claude.ai: the Call tab stops showing that step
   theme: "dark", // dark | light | auto (the system's)
   prompterKey: "", // the bridge key from the Suggeritore's link (?view=prompter in another app or device)
+  lastSpeed: null, // what the transcription ran on last time, and how fast (Settings → Transcription)
 };
 const CLAUDE_NEW_CHAT = "https://claude.ai/new";
 
@@ -348,6 +351,10 @@ function handleEvent(kind, payload) {
       const device = ms ? t("model_speed", { device: payload, s: (ms / 1000).toFixed(1) }) : payload;
       const faster = ms && ms < 1200 && settings.whisperModel === "base" ? ` ${t("try_small")}` : "";
       setNotice($("notice"), t("model_ready", { device }) + faster, "ok");
+      // Kept for Settings: what ran last time, where, and how fast.
+      settings = { ...settings, lastSpeed: { model: settings.whisperModel, device: String(payload), ms: ms || 0 } };
+      saveSettings();
+      renderTranscriptionDiag();
       break;
     }
     case "audio":
@@ -1228,30 +1235,56 @@ let manualRender = 0; // the latest status wins: an older check finishing late d
 async function renderManualModel(note = "") {
   const ticket = ++manualRender;
   const model = $("whisper-model").value || settings.whisperModel;
+  // With a GPU in this browser, two more files let the transcription run there (see model-files.js).
+  const gpu = await gpuAvailable();
+  if (ticket !== manualRender) return;
+  show($("manual-gpu-hint"), gpu);
   const list = $("manual-links");
   list.innerHTML = "";
-  for (const { name, url } of manualDownloadLinks(model)) {
+  for (const link of manualDownloadLinks(model, { gpu })) {
     const li = document.createElement("li");
     const a = document.createElement("a");
-    a.href = url;
+    a.href = link.url;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = `${name} (whisper-${model})`;
+    a.textContent = `${link.name} (whisper-${model}${link.gpu ? ", GPU" : ""})`;
     li.append(a);
     list.append(li);
   }
   // Nothing loaded by hand yet: no status. Some files: what is still missing. All of them: ready.
   const missing = await missingManualFiles(model);
+  const missingGpu = gpu ? await missingManualFiles(model, GPU_FILES) : [];
   if (ticket !== manualRender) return;
-  const started = missing.length < manualDownloadLinks(model).length;
-  if (started && missing.length) $("manual-box").open = true;
+  const started = missing.length < manualDownloadLinks(model).length || (gpu && missingGpu.length < GPU_FILES.length);
+  if (started && (missing.length || missingGpu.length)) $("manual-box").open = true;
   const state = !started ? "" : missing.length ? t("manual_missing", { files: missing.join(", ") }) : t("manual_ready");
-  $("manual-status").textContent = [note, state].filter(Boolean).join(" ");
+  const gpuState = !gpu || !started ? "" : missingGpu.length ? t("manual_gpu_missing", { files: missingGpu.join(", ") }) : t("manual_gpu_ready");
+  $("manual-status").textContent = [note, state, gpuState].filter(Boolean).join(" ");
+}
+
+/** Whether this browser has a GPU for the transcription (asked once). */
+let gpuHere = null;
+async function gpuAvailable() {
+  if (gpuHere === null) gpuHere = TEST_GPU === "1" ? true : TEST_GPU === "0" ? false : await hasWebGpu();
+  return gpuHere;
+}
+
+/** Settings → Transcription: whether the GPU is available here, and what ran last time and how fast. */
+async function renderTranscriptionDiag() {
+  const gpu = await gpuAvailable();
+  const last = settings.lastSpeed;
+  const parts = [t(gpu ? "diag_gpu_yes" : "diag_gpu_no")];
+  if (last && last.ms) {
+    const where = t(/^webgpu/.test(last.device) ? "diag_where_gpu" : "diag_where_cpu");
+    parts.push(t("diag_last", { model: last.model, where, s: (last.ms / 1000).toFixed(1) }));
+  }
+  $("transcription-diag").textContent = parts.join(" ");
 }
 
 function renderSettings() {
   $("ui-theme").value = settings.theme;
   $("whisper-model").value = settings.whisperModel;
+  renderTranscriptionDiag();
   renderManualModel();
   $("ui-language").value = settings.uiLanguage;
   $("claude-url").value = settings.claudeUrl;

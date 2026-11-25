@@ -606,7 +606,7 @@ await step("bridge at another address (e.g. the app on GitHub Pages): connect it
 });
 
 await step("settings: speech model loaded by hand, Claude chat link, appearance, interface language", async () => {
-  const page = await newPage("");
+  const page = await newPage("?gpu=0"); // a browser without a GPU: the processor's files only
   // Dark by default; light, or the system's, at once from Settings, and kept.
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "dark");
   await page.click('[data-tab="settings"]');
@@ -665,6 +665,39 @@ await step("settings: speech model loaded by hand, Claude chat link, appearance,
   assert.equal(await page.textContent('[data-tab="history"]'), "History");
   assert.equal(await page.locator('[data-tab="memory"], #api-key').count(), 0, "no memory tab and no API key any more");
   if (SHOTS) await page.screenshot({ path: join(SHOTS, "web-settings.png"), fullPage: true });
+  await page.context().close();
+});
+
+await step("with a GPU in the browser, Settings offers the GPU's two files to load by hand, and says where the transcription runs", async () => {
+  const page = await newPage("?gpu=1");
+  await page.click('[data-tab="settings"]');
+  await page.waitForFunction(() => /la GPU è disponibile/.test(document.querySelector("#transcription-diag").textContent));
+  assert.ok(await page.isVisible("#manual-gpu-hint") || !(await page.locator("#manual-box").evaluate((d) => d.open)), "the hint is in the fold");
+  assert.equal(await page.locator("#manual-links a").count(), 9);
+  const gpuLinks = await page.$$eval("#manual-links a", (as) => as.filter((a) => a.textContent.includes("GPU")).map((a) => a.getAttribute("href")));
+  assert.equal(gpuLinks.length, 2);
+  assert.match(gpuLinks[0], /whisper-base\/resolve\/main\/onnx\/encoder_model\.onnx$/);
+  assert.match(gpuLinks[1], /whisper-base\/resolve\/main\/onnx\/decoder_model_merged_q4\.onnx$/);
+  const onnx = (fill) => Buffer.concat([Buffer.from([0x08, 0x07]), Buffer.alloc(1_100_000, fill)]);
+  await page.setInputFiles("#manual-files", [
+    { name: "encoder_model.onnx", mimeType: "application/octet-stream", buffer: onnx(3) },
+    { name: "decoder_model_merged_q4.onnx", mimeType: "application/octet-stream", buffer: onnx(4) },
+  ]);
+  await page.waitForFunction(() => /File della GPU caricati/.test(document.querySelector("#manual-status").textContent));
+  const cached = await page.evaluate(async () => {
+    const cache = await caches.open("transformers-cache");
+    const base = "https://huggingface.co/onnx-community/whisper-base/resolve/main/onnx/";
+    return [Boolean(await cache.match(base + "encoder_model.onnx")), Boolean(await cache.match(base + "decoder_model_merged_q4.onnx"))];
+  });
+  assert.deepEqual(cached, [true, true]);
+  // The speed measured on the last call shows in Settings, with where it ran.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem("ca.settings.v1"));
+    localStorage.setItem("ca.settings.v1", JSON.stringify({ ...s, lastSpeed: { model: "base", device: "webgpu, modello caricato a mano", ms: 420 } }));
+  });
+  await page.reload();
+  await page.click('[data-tab="settings"]');
+  await page.waitForFunction(() => /Ultima chiamata: modello base su GPU, 0\.4 s per blocco/.test(document.querySelector("#transcription-diag").textContent));
   await page.context().close();
 });
 

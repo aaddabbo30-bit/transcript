@@ -3,7 +3,9 @@
 // in the background. The user downloads the files from a tab (so they are
 // checked) and picks them here; they are stored in the browser cache under the
 // same address Transformers.js would download them from, so it finds them there.
-// Whisper needs the two large .onnx files and five small .json files.
+// Whisper needs the two large .onnx files and five small .json files. Where
+// the browser has a GPU (WebGPU), two more large files let it run there, much
+// faster than on the processor: the full-precision encoder and a 4-bit decoder.
 
 export const CACHE_NAME = "transformers-cache"; // Transformers.js' browser cache
 const HF = "https://huggingface.co";
@@ -14,6 +16,20 @@ export const MODEL_REPOS = { base: "onnx-community/whisper-base", small: "onnx-c
 export const BIG_FILES = ["onnx/encoder_model_quantized.onnx", "onnx/decoder_model_merged_quantized.onnx"];
 export const SMALL_FILES = ["config.json", "generation_config.json", "preprocessor_config.json", "tokenizer.json", "tokenizer_config.json"];
 const MANUAL_FILES = [...BIG_FILES, ...SMALL_FILES];
+// The GPU's files (the names Transformers.js asks for with dtype {encoder_model: "fp32", decoder_model_merged: "q4"}).
+export const GPU_FILES = ["onnx/encoder_model.onnx", "onnx/decoder_model_merged_q4.onnx"];
+const ALL_FILES = [...MANUAL_FILES, ...GPU_FILES];
+export const GPU_DTYPE = { encoder_model: "fp32", decoder_model_merged: "q4" };
+
+/** Whether this browser offers a GPU to WebGPU (also in a worker). */
+export async function hasWebGpu() {
+  try {
+    const gpu = typeof navigator !== "undefined" && navigator.gpu;
+    return Boolean(gpu && (await gpu.requestAdapter()));
+  } catch {
+    return false;
+  }
+}
 
 export class ModelFileError extends Error {}
 
@@ -21,14 +37,16 @@ export function fileUrl(model, path) {
   return `${HF}/${MODEL_REPOS[model] || MODEL_REPOS.base}/resolve/main/${path}`;
 }
 
-export function manualDownloadLinks(model) {
-  return MANUAL_FILES.map((path) => ({ name: path.split("/").pop(), url: fileUrl(model, path) }));
+/** The files to download by hand; with `gpu`, also the GPU's two (marked gpu: true). */
+export function manualDownloadLinks(model, { gpu = false } = {}) {
+  const link = (path, isGpu) => ({ name: path.split("/").pop(), url: fileUrl(model, path), gpu: isGpu });
+  return [...MANUAL_FILES.map((p) => link(p, false)), ...(gpu ? GPU_FILES.map((p) => link(p, true)) : [])];
 }
 
 /** Where a picked file belongs, by its name ("x (1).onnx" = the browser renamed a second download). */
 export function targetUrl(model, fileName) {
   const name = String(fileName).replace(/ \(\d+\)(?=\.[^.]+$)/, "");
-  const path = MANUAL_FILES.find((p) => p.split("/").pop() === name);
+  const path = ALL_FILES.find((p) => p.split("/").pop() === name);
   if (path) return fileUrl(model, path);
   if (name === ORT_WASM.split("/").pop()) return ORT_WASM;
   return null;
@@ -86,14 +104,19 @@ export async function hasManualModel(model) {
   }
 }
 
-/** The files of this model not loaded by hand yet, by name. */
-export async function missingManualFiles(model) {
-  const names = MANUAL_FILES.map((p) => p.split("/").pop());
+/** True when the GPU's two files of this model were loaded by hand. */
+export async function hasManualGpuModel(model) {
+  return (await missingManualFiles(model, GPU_FILES)).length === 0;
+}
+
+/** The files of this model not loaded by hand yet, by name (the processor's, or the given list). */
+export async function missingManualFiles(model, paths = MANUAL_FILES) {
+  const names = paths.map((p) => p.split("/").pop());
   if (typeof caches === "undefined") return names;
   try {
     const cache = await caches.open(CACHE_NAME);
     const missing = [];
-    for (const path of MANUAL_FILES) if (!(await cache.match(fileUrl(model, path)))) missing.push(path.split("/").pop());
+    for (const path of paths) if (!(await cache.match(fileUrl(model, path)))) missing.push(path.split("/").pop());
     return missing;
   } catch {
     return names;
