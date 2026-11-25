@@ -14,6 +14,8 @@ const MERGE_MAX_S = 27;
 const MERGE_GAP_S = 12; // utterances further apart than this stay separate lines
 const JOIN_PAUSE_S = 0.25; // silence put between joined utterances
 const LAG_WARNING_S = 30; // text this late, for a while: the computer is too slow for the model
+const SKIP_BEHIND_S = 45; // more behind than this: drop the oldest waiting audio and jump back to the present
+const SKIP_KEEP_S = 12; // when skipping, keep about the last this-many seconds of waiting audio
 const ECHO_WARNING = 3; // microphone echoes dropped before telling the user
 
 export class CallSession {
@@ -32,6 +34,7 @@ export class CallSession {
     this.stopping = false;
     this.done = false;
     this.lagWarned = false;
+    this.skipNotified = false;
     this.sharedWarned = false;
     this.echoWarned = false;
     this.pendingTranscriptions = new Set();
@@ -40,7 +43,7 @@ export class CallSession {
     this.spans = []; // recent utterances {source, start, end}: who spoke when
     this.languages = { [ME]: [], [THEM]: [] }; // languages Whisper heard lately, per speaker
     this.glossary = "";
-    this.stats = { echoes: 0, dropped: 0, batches: 0, joined: 0, audioS: 0, workMs: 0 };
+    this.stats = { echoes: 0, dropped: 0, batches: 0, joined: 0, audioS: 0, workMs: 0, skipped: 0, skippedS: 0 };
     this.lag = 0;
     this.lateSince = null;
     this.result = null;
@@ -131,6 +134,7 @@ export class CallSession {
   }
 
   pump() {
+    this.skipBacklog();
     if (this.busy || !this.queue.length) return;
     const batch = this.nextBatch();
     this.busy = true;
@@ -142,6 +146,31 @@ export class CallSession {
         this.pump();
       });
     this.pendingTranscriptions.add(job);
+  }
+
+  /**
+   * When the computer can't keep up, the waiting audio piles up and the text
+   * falls minutes behind — useless for a live prompter. Past SKIP_BEHIND_S,
+   * drop the oldest waiting utterances and keep only the last SKIP_KEEP_S, so
+   * Whisper jumps back to the present. Some words are lost, not the moment.
+   */
+  skipBacklog() {
+    if (this.queue.length < 2) return;
+    const now = this.elapsed();
+    const oldest = Math.min(...this.queue.map((c) => c.end));
+    if (now - oldest <= SKIP_BEHIND_S) return;
+    const cutoff = now - SKIP_KEEP_S;
+    const newest = this.queue.reduce((a, c) => (c.end > a.end ? c : a));
+    const kept = this.queue.filter((c) => c === newest || c.end >= cutoff);
+    const dropped = this.queue.filter((c) => !(c === newest || c.end >= cutoff));
+    if (!dropped.length) return;
+    this.queue = kept;
+    this.stats.skipped += dropped.length;
+    this.stats.skippedS += dropped.reduce((n, c) => n + (c.end - c.start), 0);
+    if (!this.skipNotified) {
+      this.skipNotified = true;
+      this.emit("warning", ["skipped", { s: Math.round(now - oldest) }]);
+    }
   }
 
   /** The oldest waiting utterance, joined with the next ones of the same speaker when nobody else spoke in between. */
@@ -224,6 +253,7 @@ export class CallSession {
     if (!this.running) return;
     if (!this.stopping) this.router.checkStale();
     this.checkLag();
+    this.skipBacklog();
     this.checkSharedAudio();
   }
 
@@ -235,13 +265,17 @@ export class CallSession {
     this.emit("health", { lag: this.lag, waiting: this.queue.length, busy: this.busy, speed, ...this.stats });
     if (this.lag > LAG_WARNING_S) {
       if (this.lateSince === null) this.lateSince = now;
-      if (now - this.lateSince > 10 && !this.lagWarned) {
+      // Once it is skipping to stay live, the "slow" nag would just repeat every time the lag climbs back up.
+      if (now - this.lateSince > 10 && !this.lagWarned && !this.skipNotified) {
         this.lagWarned = true;
         this.emit("warning", ["slow", { s: Math.round(this.lag) }]);
       }
     } else {
       this.lateSince = null;
-      if (this.lag < 5) this.lagWarned = false;
+      if (this.lag < 5) {
+        this.lagWarned = false;
+        this.skipNotified = false;
+      }
     }
   }
 
