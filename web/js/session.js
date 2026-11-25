@@ -15,7 +15,7 @@ const MERGE_GAP_S = 12; // utterances further apart than this stay separate line
 const JOIN_PAUSE_S = 0.25; // silence put between joined utterances
 const LAG_WARNING_S = 30; // text this late, for a while: the computer is too slow for the model
 const SKIP_BEHIND_S = 45; // more behind than this: drop the oldest waiting audio and jump back to the present
-const SKIP_KEEP_S = 12; // when skipping, keep about the last this-many seconds of waiting audio
+const SKIP_KEEP_S = { [THEM]: 20, [ME]: 6 }; // when skipping, the waiting audio kept: more of the others' (their questions matter most)
 const ECHO_WARNING = 3; // microphone echoes dropped before telling the user
 
 export class CallSession {
@@ -151,18 +151,20 @@ export class CallSession {
   /**
    * When the computer can't keep up, the waiting audio piles up and the text
    * falls minutes behind — useless for a live prompter. Past SKIP_BEHIND_S,
-   * drop the oldest waiting utterances and keep only the last SKIP_KEEP_S, so
-   * Whisper jumps back to the present. Some words are lost, not the moment.
+   * drop the oldest waiting utterances, so Whisper jumps back to the present:
+   * some words are lost, not the moment. More of the others' speech is kept
+   * than of the user's own (SKIP_KEEP_S): what they ask is what the prompter
+   * must catch.
    */
   skipBacklog() {
     if (this.queue.length < 2) return;
     const now = this.elapsed();
     const oldest = Math.min(...this.queue.map((c) => c.end));
     if (now - oldest <= SKIP_BEHIND_S) return;
-    const cutoff = now - SKIP_KEEP_S;
     const newest = this.queue.reduce((a, c) => (c.end > a.end ? c : a));
-    const kept = this.queue.filter((c) => c === newest || c.end >= cutoff);
-    const dropped = this.queue.filter((c) => !(c === newest || c.end >= cutoff));
+    const keep = (c) => c === newest || c.end >= now - (SKIP_KEEP_S[c.source] ?? SKIP_KEEP_S[THEM]);
+    const kept = this.queue.filter(keep);
+    const dropped = this.queue.filter((c) => !keep(c));
     if (!dropped.length) return;
     this.queue = kept;
     this.stats.skipped += dropped.length;
@@ -176,7 +178,9 @@ export class CallSession {
   /** The oldest waiting utterance, joined with the next ones of the same speaker when nobody else spoke in between. */
   nextBatch() {
     this.queue.sort((a, b) => a.start - b.start);
-    const first = this.queue.shift();
+    // Behind: the others first (the user knows what they said). The transcript still sorts lines by time.
+    const theirs = this.lag > LAG_WARNING_S ? this.queue.findIndex((c) => c.source === THEM) : -1;
+    const first = theirs > 0 ? this.queue.splice(theirs, 1)[0] : this.queue.shift();
     const batch = [first];
     let seconds = first.end - first.start;
     for (let i = 0; i < this.queue.length; ) {

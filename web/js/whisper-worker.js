@@ -13,19 +13,11 @@ let queue = Promise.resolve();
 
 const post = (msg) => self.postMessage(msg);
 
-async function pickDevice() {
-  try {
-    if (self.navigator && self.navigator.gpu && (await self.navigator.gpu.requestAdapter())) return "webgpu";
-  } catch {
-    /* no WebGPU */
-  }
-  return "wasm";
-}
 
 async function load(modelKey) {
   // Workers don't see the page's import map: pass on this file's "?v=" (see web/tools/stamp.mjs).
   const version = new URL(import.meta.url).search;
-  const { MODEL_REPOS, hasManualModel } = await import(`./model-files.js${version}`);
+  const { MODEL_REPOS, GPU_DTYPE, hasManualGpuModel, hasManualModel, hasWebGpu } = await import(`./model-files.js${version}`);
   core = await import(`./whisper-core.js${version}`);
   const transformers = await import(TRANSFORMERS_URL);
   const { pipeline, env } = transformers;
@@ -50,17 +42,21 @@ async function load(modelKey) {
       post({ type: "progress", percent: Math.round((100 * loaded) / Math.max(1, total)) });
     }
   };
-  if (await hasManualModel(modelKey)) {
-    // Files loaded by hand are the 8-bit ones, which run on the WASM backend.
+  let device = (await hasWebGpu()) ? "webgpu" : "wasm";
+  // Loaded by hand: the GPU when its two files are there too (they sit in the cache where
+  // Transformers.js looks for them); otherwise the 8-bit files, on the processor (WASM).
+  const manual = await hasManualModel(modelKey);
+  const manualGpu = device === "webgpu" && (await hasManualGpuModel(modelKey));
+  const byHand = manual || manualGpu ? ", modello caricato a mano" : "";
+  if (manual && !manualGpu) {
     asr = await pipeline("automatic-speech-recognition", model, { device: "wasm", dtype: "q8", progress_callback });
-    return { device: "wasm, modello caricato a mano", windowMs: await warmUp() };
+    return { device: `wasm${byHand}`, windowMs: await warmUp() };
   }
-  let device = await pickDevice();
   try {
     asr = await pipeline("automatic-speech-recognition", model, {
       device,
       // WebGPU: full-precision encoder (accuracy) + 4-bit decoder (speed); WASM: 8-bit.
-      dtype: device === "webgpu" ? { encoder_model: "fp32", decoder_model_merged: "q4" } : "q8",
+      dtype: device === "webgpu" ? GPU_DTYPE : "q8",
       progress_callback,
     });
   } catch (err) {
@@ -68,7 +64,7 @@ async function load(modelKey) {
     device = "wasm";
     asr = await pipeline("automatic-speech-recognition", model, { device, dtype: "q8", progress_callback });
   }
-  return { device, windowMs: await warmUp() };
+  return { device: `${device}${byHand}`, windowMs: await warmUp() };
 }
 
 /** The first run is slow (shaders, buffers): do it before the call needs it. The second one times a window. */
